@@ -1,16 +1,26 @@
 """Custom tools exposed to the agents, as an in-process SDK MCP server.
 
-Tools are intentionally thin stubs at this stage: each has a real name, description,
-and input schema (the "tool definitions with schemas" deliverable) but returns a
-``not-yet-implemented`` marker so the wiring can be tested before the analysis logic
-lands. Fill in the bodies in subsequent steps.
+``query_locations`` and ``deduplicate_coordinates`` are live: they run against the
+provided locations dataset via DuckDB. The obstruction/risk tools are still thin
+stubs (real name, description, and input schema — the "tool definitions with
+schemas" deliverable) pending the environmental datasets; fill in their bodies in
+subsequent steps.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
+
+from leo_pipeline import ingest
+
+# Statements the read-only query tool will accept. Anything else (INSERT, COPY,
+# CREATE, ATTACH, PRAGMA, ...) is rejected so an agent can't mutate state or touch
+# the filesystem through the SQL surface.
+_READ_ONLY_PREFIXES = ("select", "with")
+_MAX_ROWS = 1000
 
 
 def _stub(name: str, **echo: Any) -> dict[str, Any]:
@@ -23,16 +33,78 @@ def _stub(name: str, **echo: Any) -> dict[str, Any]:
     }
 
 
+def _text(payload: Any) -> dict[str, Any]:
+    """Wrap a JSON-serialisable payload as an MCP text result."""
+    return {"content": [{"type": "text", "text": json.dumps(payload, default=str)}]}
+
+
+def _error(message: str) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": f"error: {message}"}], "is_error": True}
+
+
 @tool(
     "query_locations",
     "Run a read-only SQL query (DuckDB dialect) against the provided locations "
-    "dataset and return rows as JSON. Use for profiling, filtering, and aggregating "
-    "the ~1M-coordinate input.",
+    "dataset, exposed as the table `locations` (columns: location_id, latitude, "
+    "longitude, geoid_cb). Use for profiling, filtering, and aggregating the "
+    "~4.7M-row input. Only SELECT/WITH statements are allowed; results are capped.",
     {"sql": str, "limit": int},
 )
 async def query_locations(args: dict[str, Any]) -> dict[str, Any]:
-    # TODO: execute against data/raw/locations.csv via duckdb, enforce read-only + LIMIT.
-    return _stub("query_locations", sql=args.get("sql"), limit=args.get("limit"))
+    sql = (args.get("sql") or "").strip().rstrip(";").strip()
+    if not sql:
+        return _error("empty sql")
+    if not sql.lower().startswith(_READ_ONLY_PREFIXES):
+        return _error("only read-only SELECT/WITH queries are allowed")
+    if ";" in sql:
+        return _error("multiple statements are not allowed")
+    limit = args.get("limit") or 100
+    limit = max(1, min(int(limit), _MAX_ROWS))
+
+    con = ingest.connect()
+    try:
+        cur = con.execute(f"SELECT * FROM ({sql}) AS _q LIMIT {limit}")
+        columns = [d[0] for d in cur.description]
+        rows = [dict(zip(columns, r)) for r in cur.fetchall()]
+    except Exception as exc:  # surface DuckDB errors back to the agent, don't crash the tool
+        return _error(str(exc))
+    finally:
+        con.close()
+    return _text({"columns": columns, "row_count": len(rows), "rows": rows})
+
+
+@tool(
+    "deduplicate_coordinates",
+    "Collapse the location-grained input to one work item per unique coordinate so "
+    "the expensive per-coordinate obstruction sampling runs once instead of once per "
+    "location. Writes unique_coords.parquet (the work list) and "
+    "location_coord_map.parquet (the location_id->coord_id fan-out map) to "
+    "data/interim, and returns the reduction summary. `precision` is the coordinate "
+    "decimal places to round to before de-duplicating (default 6 ~= 0.11m; lower "
+    "values snap near-coincident points to a shared grid cell).",
+    {"precision": int},
+)
+async def deduplicate_coordinates(args: dict[str, Any]) -> dict[str, Any]:
+    precision = args.get("precision")
+    precision = ingest.DEFAULT_PRECISION if precision is None else int(precision)
+    con = ingest.connect()
+    try:
+        result = ingest.deduplicate_coordinates(con, precision=precision)
+    except Exception as exc:
+        return _error(str(exc))
+    finally:
+        con.close()
+    return _text(
+        {
+            "precision": result.precision,
+            "total_locations": result.total_locations,
+            "unique_coords": result.unique_coords,
+            "duplicate_locations": result.duplicate_locations,
+            "reduction_pct": round(result.reduction_pct, 2),
+            "unique_coords_path": str(result.unique_coords_path),
+            "location_map_path": str(result.location_map_path),
+        }
+    )
 
 
 @tool(
@@ -67,12 +139,18 @@ async def compute_risk_score(args: dict[str, Any]) -> dict[str, Any]:
 LEO_TOOLS_SERVER = create_sdk_mcp_server(
     name="leo",
     version="0.1.0",
-    tools=[query_locations, lookup_obstruction_layer, compute_risk_score],
+    tools=[
+        query_locations,
+        deduplicate_coordinates,
+        lookup_obstruction_layer,
+        compute_risk_score,
+    ],
 )
 
 # Fully-qualified tool identifiers for ClaudeAgentOptions(allowed_tools=...).
 TOOL_NAMES = [
     "mcp__leo__query_locations",
+    "mcp__leo__deduplicate_coordinates",
     "mcp__leo__lookup_obstruction_layer",
     "mcp__leo__compute_risk_score",
 ]

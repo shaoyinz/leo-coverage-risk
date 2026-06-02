@@ -19,10 +19,14 @@ INGESTION_AGENT = AgentDefinition(
     prompt=(
         "You are the data-ingestion agent. Profile the provided locations dataset using "
         "the query_locations tool: row counts, null/duplicate coordinates, out-of-range "
-        "lat/lon, and other anomalies. Report findings as structured quality issues. Do not "
-        "attempt risk analysis."
+        "lat/lon, and other anomalies. Report findings as structured quality issues. Then "
+        "call deduplicate_coordinates to collapse the location-grained input to one work "
+        "item per unique coordinate (writing the unique-coordinate work list and the "
+        "location_id->coord_id fan-out map to data/interim) so the downstream obstruction "
+        "sampling runs once per coordinate, not once per location. Report the reduction. "
+        "Do not attempt risk analysis."
     ),
-    tools=["mcp__leo__query_locations"],
+    tools=["mcp__leo__query_locations", "mcp__leo__deduplicate_coordinates"],
     model="inherit",
 )
 
