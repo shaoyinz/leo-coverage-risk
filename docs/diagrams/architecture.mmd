@@ -1,0 +1,44 @@
+%% LEO coverage-risk pipeline — agent / tool / dataflow architecture.
+%% Placeholder skeleton; extend as agents and tools are implemented.
+%% Render: https://mermaid.live or `mmdc -i architecture.mmd -o architecture.svg`
+
+flowchart TD
+    human([Human reviewer]):::human
+
+    subgraph orchestration[Orchestrator · claude-opus-4-8]
+        orch[Pipeline orchestrator<br/>threads PipelineState]
+    end
+
+    subgraph agents[Agents · least-privilege tool access]
+        ingest[Ingestion &amp; QA-of-data agent]
+        geo[Geospatial analysis agent]
+        qa[QA / validation agent]
+    end
+
+    subgraph tools[SDK MCP server: leo]
+        t1[[query_locations]]
+        t2[[lookup_obstruction_layer]]
+        t3[[compute_risk_score]]
+    end
+
+    subgraph data[Data]
+        csv[(locations.csv ~1M)]
+        layers[(canopy / terrain / structures)]
+        out[(risk findings + map)]
+    end
+
+    orch -->|1. profile| ingest
+    orch -->|2. analyze clean rows| geo
+    orch -->|3. validate| qa
+    qa -. anomalies .-> orch
+    orch <-->|intervention points| human
+
+    ingest --> t1
+    geo --> t1 & t2 & t3
+    qa --> t1
+
+    t1 --- csv
+    t2 --- layers
+    t3 --> out
+
+    classDef human fill:#ffe,stroke:#aa0;
