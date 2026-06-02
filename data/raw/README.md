@@ -7,7 +7,7 @@ Files in this folder are **gitignored** (the locations dataset is ~1M rows). The
 
 | File | Source | Notes |
 |------|--------|-------|
-| `locations.csv` | Challenge issue #50 attachment / shared link | ~1,000,000 coordinates. Expected to contain at least latitude & longitude columns plus an identifier. Confirm the real schema on arrival and update `docs/data-sources.md`. |
+| `locations.csv` | Provided by Ready (not yet delivered — request it) | ~1,000,000 locations LEO providers committed to serve. Schema per issue #50: **`location_id, latitude, longitude`**. Confirm on arrival and update `docs/data-sources.md`. |
 
 ## How to populate
 
