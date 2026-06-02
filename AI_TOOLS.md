@@ -19,7 +19,7 @@ as work proceeds.
   directory structure, `pyproject.toml`, source skeleton (config/agents/tools/state/
   orchestrator), docs placeholders, this file, and the README decision log.
 - **Accepted as-is:** directory layout, dependency selection, tool/agent boundary design.
-- **Diverged / corrected:** _none yet — record any edits to AI-generated output here._
+- **Diverged / corrected:** N/A
 - **Verified:** SDK API surface checked against the installed `claude-agent-sdk 0.2.87`
   (AgentDefinition fields, ClaudeAgentOptions params, `@tool`/`create_sdk_mcp_server`
   signatures); `python -m leo_pipeline.orchestrator` runs and prints the wired config.
