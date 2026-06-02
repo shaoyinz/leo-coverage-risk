@@ -28,7 +28,7 @@ class Paths:
     resources: Path = REPO_ROOT / "resources"
     docs: Path = REPO_ROOT / "docs"
     # Expected provided inputs (see data/raw/README.md).
-    locations_csv: Path = REPO_ROOT / "data" / "raw" / "locations.csv"
+    locations_csv: Path = REPO_ROOT / "data" / "raw" / "DATA_CHALLENGE_50.csv"
     install_guide_pdf: Path = REPO_ROOT / "resources" / "starlink_install_guide.pdf"
 
 
