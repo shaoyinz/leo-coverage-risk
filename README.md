@@ -10,8 +10,9 @@ Submission for the Ready Builders Challenge
 ## Status
 
 Methodology, Starlink reception geometry, and tuneable parameters documented
-(`docs/rationale.md`); ingestion/de-duplication live; obstruction & risk tools are
-schema-defined stubs pending the environmental datasets. See the [decision log](#decision-log).
+(`docs/rationale.md`); ingestion/de-duplication and the **data-discovery agent** (live
+STAC search → ranked data manifest) are live; obstruction & risk tools are schema-defined
+stubs pending the per-coordinate sampling work. See the [decision log](#decision-log).
 
 ## Layout
 
@@ -20,7 +21,7 @@ docs/        architecture, rationale, data-sources (+ Mermaid diagram)
 src/leo_pipeline/
   config.py        models, paths, env loading
   orchestrator.py  wires tools + agents into Claude Agent SDK options
-  agents/          ingestion · geo-analysis · qa (least-privilege tool access)
+  agents/          ingestion · data-discovery · geo-analysis · qa (least-privilege tool access)
   tools/           @tool defs + in-process SDK MCP server ("leo")
   state/           PipelineState threaded between agents
 notebooks/   00_data_inspection.ipynb — first-pass CSV profiling
@@ -80,13 +81,14 @@ The `ANTHROPIC_API_KEY` (challenge testing budget) goes in `.env`, never committ
 | Tool definitions with schemas | `src/leo_pipeline/tools/` |
 | State management between agents | `src/leo_pipeline/state/` |
 | Analysis rationale & methodology | `docs/rationale.md` |
-| Data sourcing & quality | `docs/data-sources.md`, `notebooks/00_data_inspection.ipynb` |
+| Data sourcing & quality | `docs/data-sources.md`, `notebooks/00_data_inspection.ipynb`; live `data-discovery` agent + `stac_search`/`write_data_manifest` (`src/leo_pipeline/`) |
 | AI-tool disclosure | `AI_TOOLS.md` |
 
 ## Decision log
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
+| 2026-06-03 | **Build the A1 data-discovery agent** — live STAC search + ranked data manifest | Wired the discovery role into `src/`: a `DATA_DISCOVERY_AGENT` plus three live tools — `get_aoi_bbox` (AOI from the locations), `stac_search` (pystac-client over Microsoft Planetary Computer), and `write_data_manifest` (persists the H1-review manifest to `data/interim/`). The agent ranks candidates by resolution/vintage/coverage/licence and is granted `WebSearch`/`WebFetch` to source **tree-canopy height**, which no Planetary Computer collection carries (verified, 134 collections). Confirmed live against the real AOI (Carolinas/N-Georgia): real items returned for 3DEP (10 m), Copernicus GLO-30, NASADEM, and MS Buildings. Filled `docs/data-sources.md` with the curated candidate catalog; added `pystac-client`/`planetary-computer` deps. Keeps the LLM-ranks / code-queries split and writes no rasters (manifest only). |
 | 2026-06-03 | **Complete `docs/rationale.md`** — approach justification, plain-language "at-risk" definition, and a consolidated **Tuneable parameters** registry | Justified the per-azimuth horizon-profile approach over a simple buffer, a binary viewshed, and ML obstruction detection; wrote a stakeholder-facing definition of the `clear`/`at-risk`/`undetermined` bands; and consolidated every modeling knob (θ, FOV cone, azimuth weighting, mount-height sweep, σ_H budget, band cut-points, search window, CRS, dedup precision) into one registry with defaults + sensitivities. Added a **per-class, derived** obstacle search radius `R_max = (H_class,max − H_a) / tan θ_min`, and rejected a single global radius as the fixed-buffer anti-pattern. **Considered then rolled back** a per-class RF-opacity weighting (trees attenuate less than opaque buildings/terrain): without canopy-depth data it risks false `clear` verdicts for forest-ringed homes, so all obstacles remain uniform opaque blockers. |
 | 2026-06-02 | Document the **obstruction methodology, Starlink reception geometry, and assumptions** in `docs/rationale.md` | Derived the per-obstacle clear-view inequality `H_b − H_a < Dist_ab · tan θ` from the install-guide requirement, and made the two physical inputs — minimum elevation angle θ (default 25°; Apr-2026 FCC relaxation toward 10–20°, 5° above 62°N) and the azimuth/FOV cone (110° Gen3 default, 140° High Performance) — exposed parameters rather than buried constants. Adopted a three-state `clear`/`at-risk`/`undetermined` outcome, a mast-height parameter sweep, parcel-clipped alternative-site suggestions, and cross-source corroboration (nDSM + second footprint source) for "no building found." Drives the `lookup_obstruction_layer` / `compute_risk_score` tool design. |
 | 2026-06-02 | De-duplicate to **one work item per unique coordinate** before obstruction sampling (`ingest.deduplicate_coordinates`) | The 4,674,917-row input holds only 4,514,477 unique coordinates — ~160K locations (one shared by 5,496) share a coordinate. Obstruction sampling is a pure function of the coordinate, so sampling per-row repeats expensive raster/vector work for no new information. Writes a unique-coordinate work list + a `location_id→coord_id` fan-out map (Parquet, `data/interim`); coords keyed on integer micro-degrees so the dedup is exact/reproducible. ~3.4% fewer samples at 6 dp, tunable higher by snapping to a coarser grid once raster resolution is known. |

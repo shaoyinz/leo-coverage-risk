@@ -1,44 +1,42 @@
 %% LEO coverage-risk pipeline — agent / tool / dataflow architecture.
-%% Placeholder skeleton; extend as agents and tools are implemented.
+%% Mirrors the inline diagram in docs/architecture.md (six-role design).
 %% Render: https://mermaid.live or `mmdc -i architecture.mmd -o architecture.svg`
 
-flowchart TD
-    human([Human reviewer]):::human
-
-    subgraph orchestration[Orchestrator · claude-opus-4-8]
-        orch[Pipeline orchestrator<br/>threads PipelineState]
+flowchart TB
+    subgraph Human["👤 Human-in-the-loop gates"]
+        H1["Approve data manifest<br/>(cost / licensing)"]
+        H2["Review anomalies<br/>& sign off insights"]
     end
 
-    subgraph agents[Agents · least-privilege tool access]
-        ingest[Ingestion &amp; QA-of-data agent]
-        geo[Geospatial analysis agent]
-        qa[QA / validation agent]
+    SPEC["📖 Obstruction spec — pre-approved config<br/>θ_min · azimuth weighting · risk tiers<br/>(domain research already done)"]
+
+    ORCH["🧭 Orchestrator / Planner<br/>(owns run + state + gates)"]
+
+    subgraph Agents["Scoped sub-agents — LLM reasons, tools compute"]
+        A1["🔎 Data-Discovery<br/>STAC / catalog search → manifest"]
+        A2["⬇️ Ingestion<br/>COG windows → aligned pseudo-DSM"]
+        A3["📐 Analysis<br/>horizon/viewshed → obstruction% → tier"]
+        A4["✅ Validation/QA<br/>input dedup + output anomaly checks"]
+        A5["📝 Reporting/Insight<br/>aggregates + map + decision log"]
     end
 
-    subgraph tools[SDK MCP server: leo]
-        t1[[query_locations]]
-        t2[[lookup_obstruction_layer]]
-        t3[[compute_risk_score]]
+    subgraph Ext["External services / data"]
+        E1["STAC: Planetary Computer /<br/>Earth Engine / AWS Open Data"]
+        E2["COG stores: 3DEP DSM/DEM,<br/>Meta/ETH canopy, NLCD TCC"]
     end
 
-    subgraph data[Data]
-        csv[(locations.csv ~1M)]
-        layers[(canopy / terrain / structures)]
-        out[(risk findings + map)]
-    end
+    STATE[("🗄️ State store<br/>DuckDB/PostGIS + GeoParquet/COG cache<br/>keyed by location_id & tile_id")]
+    OBS["📊 Observability<br/>tokens · latency · tool-call accuracy · drift"]
 
-    orch -->|1. profile| ingest
-    orch -->|2. analyze clean rows| geo
-    orch -->|3. validate| qa
-    qa -. anomalies .-> orch
-    orch <-->|intervention points| human
-
-    ingest --> t1
-    geo --> t1 & t2 & t3
-    qa --> t1
-
-    t1 --- csv
-    t2 --- layers
-    t3 --> out
-
-    classDef human fill:#ffe,stroke:#aa0;
+    SPEC --> ORCH
+    ORCH --> A1 --> E1
+    A1 -.manifest.-> H1 --> ORCH
+    ORCH --> A2 --> E2
+    A2 --> STATE
+    ORCH --> A3 --> STATE
+    SPEC -.params.-> A3
+    ORCH --> A4 --> STATE
+    A4 -.anomalies.-> H2 --> ORCH
+    ORCH --> A5 --> STATE
+    A5 -.insights.-> H2
+    Agents -.traces.-> OBS

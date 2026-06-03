@@ -24,13 +24,20 @@ def build_options() -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         model=MODELS.driver,
         mcp_servers={"leo": LEO_TOOLS_SERVER},
-        allowed_tools=TOOL_NAMES,
+        # The data-discovery agent also uses the built-in WebSearch/WebFetch tools to
+        # source datasets that aren't in a STAC catalog (e.g. canopy height).
+        allowed_tools=TOOL_NAMES + ["WebSearch", "WebFetch"],
         agents=all_agents(),
         cwd=str(PATHS.root),
         system_prompt=(
             "You orchestrate a LEO satellite coverage-risk pipeline. Delegate to the "
-            "ingestion, geo-analysis, and qa subagents in order, threading state between "
-            "them, and surface anomalies for human review."
+            "subagents in order, threading state between them: (1) ingestion profiles "
+            "and de-duplicates the locations; (2) data-discovery searches STAC + the web "
+            "for the obstruction datasets covering that area and writes a ranked data "
+            "manifest — STOP and surface that manifest for human approval (the H1 gate) "
+            "on cost/licensing before any bulk download; (3) geo-analysis samples the "
+            "approved layers and scores risk; (4) qa validates the outputs. Surface "
+            "anomalies for human review."
         ),
     )
 
@@ -45,7 +52,7 @@ def describe() -> str:
         f"  worker model : {MODELS.worker}",
         f"  repo root    : {PATHS.root}",
         f"  mcp servers  : {list(opts.mcp_servers)}",
-        f"  tools        : {TOOL_NAMES}",
+        f"  tools        : {opts.allowed_tools}",
         f"  agents       : {list(opts.agents or {})}",
         f"  start stage  : {state.stage.value}",
     ]

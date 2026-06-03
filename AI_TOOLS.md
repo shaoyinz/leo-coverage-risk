@@ -9,8 +9,8 @@ as work proceeds.
 | Tool | Model | Purpose |
 |------|-------|---------|
 | Claude Code (CLI) | Claude Opus 4.8 | Planning, scaffolding the repo, writing code & docs in this session. |
-| Web search / fetch (via Claude Code) | — | Gathering and citing public sources for the Starlink reception parameters (minimum elevation angle, dish field-of-view, the 2026 FCC elevation change) documented in `docs/rationale.md`. |
-| Claude Agent SDK (`claude-agent-sdk`) | Opus 4.8 (driver) / Sonnet 4.6 (workers) | Runtime multi-agent orchestration of the pipeline itself (ingestion / geo-analysis / qa) and custom tool execution. |
+| Web search / fetch (via Claude Code) | — | (1) Gathering and citing public sources for the Starlink reception parameters (minimum elevation angle, dish field-of-view, the 2026 FCC elevation change) in `docs/rationale.md`. (2) Granted to the runtime **data-discovery agent** as the built-in `WebSearch`/`WebFetch` tools, to source off-catalog datasets (tree-canopy height) and licensing terms not carried by any STAC catalog. |
+| Claude Agent SDK (`claude-agent-sdk`) | Opus 4.8 (driver) / Sonnet 4.6 (workers) | Runtime multi-agent orchestration of the pipeline itself (ingestion / data-discovery / geo-analysis / qa) and custom tool execution. |
 | Anthropic SDK (`anthropic`) | — | Reserved for direct Messages API calls and token/usage metrics (agent-monitoring bonus). |
 
 ## Log
@@ -55,6 +55,28 @@ as work proceeds.
 - **Verified:** distance-window figures recomputed (1/tan 25° ≈ 2.1, 1/tan 10° ≈ 5.7;
   20 m tree ≈ 55 m, 300 m ridge ≈ 1.7 km); internal anchor links checked; grep confirmed no
   stale opacity / ITU references remain after the rollback.
+
+### 2026-06-03 — Data-discovery agent (A1): live STAC search + ranked data manifest
+- **Used:** Claude Code (Opus 4.8) in plan mode to design and implement the A1
+  data-discovery agent — three live tools (`get_aoi_bbox`, `stac_search`,
+  `write_data_manifest`), the `DATA_DISCOVERY_AGENT` definition (granted `WebSearch`/
+  `WebFetch`), the orchestrator wiring, and the `docs/data-sources.md` candidate catalog.
+  Added `pystac-client` + `planetary-computer` dependencies.
+- **Accepted as-is:** live search over Microsoft Planetary Computer; `stac_search` as a
+  per-collection **coverage/metadata probe** (not a tile download); the persisted JSON
+  manifest as the H1 review artifact.
+- **Diverged / corrected:** scope was **reviewer-directed via clarifying questions** —
+  chose *live* STAC search (not schema stubs), *granting web tools* for off-catalog canopy
+  height, and *pystac-client* over a hand-rolled `requests` client. The agent derives its
+  AOI through a dedicated deterministic `get_aoi_bbox` tool rather than being given raw SQL
+  access, keeping its tool surface least-privilege and honouring the "code computes, LLM
+  ranks" boundary.
+- **Verified:** live smoke tests — `stac_search` returns real items at 100% AOI coverage
+  for `3dep-seamless` (10 m), `cop-dem-glo-30` (30 m), `nasadem`, and `ms-buildings`;
+  tree-canopy height confirmed **absent** from Planetary Computer (134 collections),
+  validating the web-research path; `write_data_manifest` persists
+  `data/interim/data_manifest.json` (gitignored); `python -m leo_pipeline.orchestrator`
+  prints the agent + tools wired.
 
 > When you accept, reject, or rework AI-generated analysis or code, add a dated entry
 > noting what and why. This is graded under "Communication & documentation."

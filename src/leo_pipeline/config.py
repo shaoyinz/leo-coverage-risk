@@ -7,7 +7,7 @@ orchestrator without side effects beyond loading ``.env``.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -39,8 +39,43 @@ class Models:
     worker: str = os.getenv("LEO_WORKER_MODEL", "claude-sonnet-4-6")
 
 
+@dataclass(frozen=True)
+class Discovery:
+    """Config for the A1 data-discovery agent: which catalogs/collections to search.
+
+    The agent searches these STAC collections for the obstruction surfaces the
+    methodology needs (terrain DEM, lidar DSM, building footprints), ranks the hits,
+    and writes a manifest. Tree-canopy *height* is deliberately absent from the
+    candidate list because no Planetary Computer collection hosts it — the agent is
+    expected to source it off-catalog via web research (Meta 1 m / ETH 10 m), which is
+    why ``candidate_collections["canopy"]`` is empty rather than missing.
+    """
+
+    # STAC catalog endpoints the agent may query (label -> root URL).
+    stac_catalogs: dict[str, str] = field(
+        default_factory=lambda: {
+            "planetary_computer": "https://planetarycomputer.microsoft.com/api/stac/v1",
+        }
+    )
+    # Obstruction factor -> candidate STAC collection ids (best first). ``canopy`` is
+    # intentionally empty: off-catalog, sourced via WebSearch/WebFetch.
+    candidate_collections: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            "terrain": ["3dep-seamless", "cop-dem-glo-30", "nasadem"],
+            "surface": ["3dep-lidar-dsm"],
+            "buildings": ["ms-buildings"],
+            "canopy": [],
+        }
+    )
+    # Where write_data_manifest persists the H1 review artifact.
+    manifest_path: Path = REPO_ROOT / "data" / "interim" / "data_manifest.json"
+    # Fallback AOI (CONUS bbox, lon/lat) used only when the locations CSV is absent.
+    default_aoi_bbox: tuple[float, float, float, float] = (-125.0, 24.0, -66.5, 49.5)
+
+
 PATHS = Paths()
 MODELS = Models()
+DISCOVERY = Discovery()
 
 
 def require_api_key() -> str:

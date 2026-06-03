@@ -119,6 +119,36 @@ def profile_locations(con: duckdb.DuckDBPyConnection) -> ProfileResult:
     )
 
 
+def aoi_bbox(con: duckdb.DuckDBPyConnection) -> dict:
+    """Bounding box (lon/lat) of the usable locations — the AOI for data discovery.
+
+    Computed over the same clean subset ``profile_locations`` /
+    ``deduplicate_coordinates`` use (null and out-of-range coordinates excluded), so
+    the area handed to the discovery agent matches the area that will actually be
+    sampled. Returns a STAC-style ``[min_lon, min_lat, max_lon, max_lat]`` plus the
+    total and distinct-coordinate counts.
+    """
+    min_lon, min_lat, max_lon, max_lat, n_total, n_distinct = con.execute(
+        """
+        SELECT
+            min(longitude), min(latitude),
+            max(longitude), max(latitude),
+            count(*),
+            count(DISTINCT (latitude, longitude))
+        FROM locations
+        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+          AND latitude  BETWEEN -90  AND 90
+          AND longitude BETWEEN -180 AND 180
+        """
+    ).fetchone()
+    return {
+        "bbox": [min_lon, min_lat, max_lon, max_lat],
+        "crs": "EPSG:4326",
+        "n_total": n_total,
+        "n_distinct": n_distinct,
+    }
+
+
 def deduplicate_coordinates(
     con: duckdb.DuckDBPyConnection,
     *,

@@ -30,6 +30,55 @@ INGESTION_AGENT = AgentDefinition(
     model="inherit",
 )
 
+# --- Data-discovery agent (A1) --------------------------------------------------------
+# Scope: source the environmental obstruction datasets for the AOI and produce a ranked,
+# human-reviewable data manifest. Reasons/ranks only — never downloads rasters.
+DATA_DISCOVERY_AGENT = AgentDefinition(
+    description="Searches STAC catalogs + the web for obstruction datasets and writes a ranked data manifest.",
+    prompt=(
+        "You are the data-discovery agent (A1 in docs/architecture.md). Your job is to "
+        "find the public geospatial datasets needed to model sky obstruction for the "
+        "input locations, rank them, and write ONE ranked data manifest for human "
+        "approval (the H1 gate). You do NOT download rasters or compute risk — your only "
+        "artifact is the manifest.\n\n"
+        "The methodology (docs/rationale.md) needs a fused surface = terrain + the taller "
+        "of canopy/buildings, so source four obstruction factors:\n"
+        "  - terrain: bare-earth DEM\n"
+        "  - surface: lidar-derived DSM where it exists (preferred; first-return surface)\n"
+        "  - canopy: tree-canopy HEIGHT (not percent-cover — cover cannot give a horizon)\n"
+        "  - buildings: building footprints, ideally with height\n"
+        "Honour the fallback hierarchy: true lidar DSM > DEM + max(canopy height, building "
+        "height) > coarse cover proxy.\n\n"
+        "Workflow:\n"
+        "1. Call get_aoi_bbox to get the AOI (the bounding box of the input locations).\n"
+        "2. For terrain/surface/buildings, call stac_search against the 'planetary_computer' "
+        "catalog over the AOI. Start from these candidate collections and compare them: "
+        "terrain -> ['3dep-seamless','cop-dem-glo-30','nasadem']; surface -> "
+        "['3dep-lidar-dsm']; buildings -> ['ms-buildings']. Rank by RESOLUTION (gsd_m, "
+        "smaller is better), VINTAGE (newer datetime), AOI COVERAGE (aoi_coverage_pct), and "
+        "LICENCE/cost. Note that 3DEP is high-res but CONUS-only, while Copernicus/NASADEM "
+        "are global fallbacks — pick the best where it covers the AOI and a global fallback "
+        "elsewhere.\n"
+        "3. Canopy HEIGHT is NOT in Planetary Computer. Use WebSearch/WebFetch to find a "
+        "canopy-height source (e.g. Meta/WRI 1 m or ETH GlobalCanopyHeight 10 m) and record "
+        "its access method, resolution, vintage, and LICENCE.\n"
+        "4. Call write_data_manifest with the AOI and a list of entries — include the "
+        "SELECTED dataset per factor AND the notable rejected alternatives (selected=false), "
+        "each with a one-line rationale. Set access='stac' for catalog hits (with collection "
+        "and a representative unsigned asset_href) and access='web' for off-catalog sources. "
+        "Put licence concerns, coverage gaps, and any factor you could not source into "
+        "`notes` — these are exactly what the H1 reviewer must sign off before bulk download."
+    ),
+    tools=[
+        "mcp__leo__get_aoi_bbox",
+        "mcp__leo__stac_search",
+        "mcp__leo__write_data_manifest",
+        "WebSearch",
+        "WebFetch",
+    ],
+    model="inherit",
+)
+
 # --- Geospatial analysis agent --------------------------------------------------------
 # Scope: for clean locations, sample obstruction layers and compute risk scores.
 GEO_ANALYSIS_AGENT = AgentDefinition(
@@ -66,9 +115,17 @@ def all_agents() -> dict[str, AgentDefinition]:
     """Map of agent name -> definition for ClaudeAgentOptions(agents=...)."""
     return {
         "ingestion": INGESTION_AGENT,
+        "data-discovery": DATA_DISCOVERY_AGENT,
         "geo-analysis": GEO_ANALYSIS_AGENT,
         "qa": QA_AGENT,
     }
 
 
-__all__ = ["INGESTION_AGENT", "GEO_ANALYSIS_AGENT", "QA_AGENT", "all_agents", "MODELS"]
+__all__ = [
+    "INGESTION_AGENT",
+    "DATA_DISCOVERY_AGENT",
+    "GEO_ANALYSIS_AGENT",
+    "QA_AGENT",
+    "all_agents",
+    "MODELS",
+]

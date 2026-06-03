@@ -24,6 +24,8 @@ dependencies = [
     "shapely>=2.0",
     "rasterio>=1.3",              # terrain / canopy raster sampling
     "requests>=2.31",
+    "pystac-client>=0.9",         # live STAC catalog search (data-discovery agent)
+    "planetary-computer>=1.0",    # sign Planetary Computer asset hrefs
 ]
 
 [project.optional-dependencies]
