@@ -169,16 +169,52 @@ GEO_ANALYSIS_AGENT = AgentDefinition(
     model="inherit",
 )
 
-# --- QA / validation agent ------------------------------------------------------------
-# Scope: sanity-check analysis outputs, catch anomalous results before reporting.
+# --- QA / validation agent (A4) -------------------------------------------------------
+# Scope: validate BOTH the input rows and the A3 output before anything is published —
+# deterministic stats + anomaly rules (leo_pipeline.qa) do the detection; the LLM only
+# triages/explains each flagged anomaly and decides what routes to the H2 human gate. It is
+# read-only: it never mutates run state and never silently publishes a degraded result
+# (architecture.md §5 failure handling, §7 H2 gate).
 QA_AGENT = AgentDefinition(
-    description="Validates analysis outputs for anomalies and internal consistency before reporting.",
-    prompt=(
-        "You are the QA agent. Review the risk findings for anomalies: implausible score "
-        "distributions, missing coverage, contradictions with the data-quality report. Approve "
-        "the run or send it back with specific reasons. You have read-only query access."
+    description=(
+        "Validates input quality and A3 output anomalies, triages each flagged issue, and "
+        "decides what reaches the H2 human-review gate."
     ),
-    tools=["mcp__leo__query_locations"],
+    prompt=(
+        "You are the validation/QA agent (A4 in docs/architecture.md). You are the last "
+        "check before results reach a human: audit the input rows and the A3 obstruction "
+        "findings, explain anything anomalous, and decide whether the run is clean or must "
+        "go to the H2 review queue. The detection is deterministic and lives in the tools — "
+        "your job is to TRIAGE what they surface, not to compute stats or re-score, and NOT "
+        "to silently approve a degraded run. You are read-only: you never mutate run state.\n\n"
+        "1. Call qa_input_audit first to size the input quarantine buckets (null / "
+        "out-of-range coordinates, the (0,0) null island, off-AOI points, lat/lon-swapped "
+        "rows). A small quarantine rate is normal and the deterministic ingest step already "
+        "drops those rows — call it out only if a bucket is implausibly large (e.g. a big "
+        "swapped-lat/lon count suggests an upstream column mix-up worth fixing-and-requeuing "
+        "rather than dropping).\n"
+        "2. Call qa_location_batch to scan the A3 findings for OUTPUT anomalies: a region "
+        "(tile, or county where the dedup maps exist) implausibly saturated with at-risk "
+        "locations (the 'a county at 100% at-risk' smell), a risk_tier that disagrees with "
+        "its own obstruction_pct, too many undetermined / low-confidence scores, a "
+        "degenerate all-identical distribution, or mixed spec_version in one run. Pass the "
+        "findings inline if you have them, else let it load the per-tile findings A3 wrote.\n"
+        "3. For each anomaly, triage it: a 'critical' (tier↔pct inconsistency, "
+        "out-of-range value, spec drift) is a pipeline bug — send the run back, do not "
+        "publish. A 'warn' (a saturated region, high undetermined rate) may be genuine — use "
+        "query_locations to cross-check the input (e.g. how many locations really sit in that "
+        "tile/county) and, if useful, web_fetch to sanity-check whether the area is plausibly "
+        "that obstructed before deciding it is real vs. a data artefact.\n"
+        "4. Report a verdict: PASS (no anomalies, or all explained as genuine) or REVIEW "
+        "(route the listed anomalies to the H2 gate), with the specific reasons and the "
+        "qa_spec_version. Never convert an unexplained anomaly into a silent pass."
+    ),
+    tools=[
+        "mcp__leo__qa_input_audit",
+        "mcp__leo__qa_location_batch",
+        "mcp__leo__query_locations",
+        "WebFetch",
+    ],
     model="inherit",
 )
 

@@ -148,5 +148,32 @@ as work proceeds.
   agentically verified** — no live A3 agent run has been driven; only the deterministic engine
   and tool wiring are exercised.
 
+### 2026-06-03 — Validation/QA agent (A4): live input-quality audit + output-anomaly scan
+- **Used:** Claude Code (Opus 4.8) to design and build the A4 role end-to-end: a deterministic
+  `qa.py` engine (input-quality DuckDB audit; output-anomaly rules — saturated region,
+  tier↔pct consistency, coverage budgets, degenerate distribution, spec drift), a
+  version-stamped `config.QA` spec, two least-privilege tools (`qa_input_audit`,
+  `qa_location_batch`), a `QAAnomaly` state record, a rewritten `qa` agent, a standalone
+  `leo-qa` CLI (with a no-API `--compute` path), and an offline test suite.
+- **Accepted as-is:** the rules-detect / LLM-only-triages split (the agent never computes
+  stats or re-scores — it explains a flagged anomaly and routes it to the H2 gate); reusing
+  `config.Analysis` band cut-points for the tier-consistency check rather than duplicating
+  thresholds; the `DataQualityIssue` (input) + `QAAnomaly` (output) state split.
+- **Diverged / corrected:** scope set by **clarifying questions** to the user — chose **both**
+  input quality + output anomalies (over output-only) and **both** tile + county grouping (over
+  tile-only). Caught two issues in self-review before they shipped: (1) the degenerate-
+  distribution rule was gated behind `min_region_size` and so missed mid-size groups — split it
+  onto its own `degenerate_group_min` gate; (2) it flagged a legitimately **all-clear** region
+  (all `pct=0`) as "degenerate" — restricted the rule to a repeated **non-zero** constant, since
+  an all-zero region is the common benign case. Also corrected the county grouping from the raw
+  15-digit `geoid_cb` **census block** (groups of ~1, never flagged) to the **5-digit county
+  FIPS** the architecture's "county at 100% at-risk" example actually means.
+- **Verified:** 35 new offline tests (engine rules, both tools, CLI plumbing; in-memory DuckDB
+  for the input audit). Full suite 135 passed / 2 skipped (opt-in live). End-to-end offline:
+  `qa_input_audit` ran over the real 4.67M-row CSV (0 quarantined — clean, in-AOI), and a
+  saturated synthetic tile flagged **both** tile- and county-level (Mecklenburg, FIPS 37119)
+  anomalies via the live dedup-map join. **Not yet agentically verified** — no live A4 agent run
+  has been driven (same API-key budget block as A2/A3); the engine + tool wiring are exercised.
+
 > When you accept, reject, or rework AI-generated analysis or code, add a dated entry
 > noting what and why. This is graded under "Communication & documentation."

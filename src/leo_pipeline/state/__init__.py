@@ -118,6 +118,26 @@ class ObstructionResult:
 
 
 @dataclass
+class QAAnomaly:
+    """A4 output: one anomaly the QA agent flagged in the A3 findings (architecture §5).
+
+    The deterministic rules in ``leo_pipeline.qa`` produce these; the LLM triages/explains
+    each and decides whether it routes to the H2 human-review gate. ``severity`` orders
+    triage (``critical`` always blocks an auto-publish), ``scope`` says where it bit
+    (the whole ``run``, a ``tile:<id>``/``county:<geoid>`` region, or a ``location:<id>``),
+    and ``sample_ids`` carries a few offending ids so a human can spot-check without a
+    re-scan. A degraded result is surfaced, never silently published."""
+
+    rule: str  # "saturated_region" | "tier_inconsistent" | "undetermined_rate" | ...
+    severity: str  # "info" | "warn" | "critical"
+    scope: str  # "run" | "tile:<id>" | "county:<geoid>" | "location:<id>"
+    detail: str
+    metric: float | None = None  # the measured value that tripped the rule
+    threshold: float | None = None  # the spec threshold it crossed
+    sample_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
 class PipelineState:
     """Mutable state threaded through the agent graph."""
 
@@ -132,6 +152,9 @@ class PipelineState:
     # Per-location obstruction scores from the analysis agent (A3; empty until A3 runs).
     obstruction: list[ObstructionResult] = field(default_factory=list)
     findings: list[RiskFinding] = field(default_factory=list)
+    # Output anomalies from the QA agent (A4; empty until A4 runs). Non-empty + any
+    # critical severity is what the orchestrator surfaces to the H2 human gate.
+    anomalies: list[QAAnomaly] = field(default_factory=list)
     # Free-form notes/log entries each agent can append for the decision log.
     notes: list[str] = field(default_factory=list)
     # Set when an agent hits an unrecoverable problem; orchestrator surfaces for intervention.

@@ -6,7 +6,9 @@ provided locations dataset); the A1 data-discovery trio ``get_aoi_bbox`` /
 persistence); the A2 surface-ingestion tools ``stac_item_read`` /
 ``fetch_aligned_surface`` / ``cache_rw`` (windowed COG read + reproject + fuse); and
 the A3 analysis tools ``compute_sky_obstruction`` / ``find_clear_sky_spot`` (the
-per-azimuth horizon-profile obstruction scoring in ``leo_pipeline.horizon``).
+per-azimuth horizon-profile obstruction scoring in ``leo_pipeline.horizon``); and the
+A4 QA tools ``qa_input_audit`` / ``qa_location_batch`` (deterministic input-quality +
+output-anomaly checks in ``leo_pipeline.qa``).
 """
 
 from __future__ import annotations
@@ -23,7 +25,8 @@ from urllib.request import urlopen
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from leo_pipeline import ingest
-from leo_pipeline.config import ANALYSIS, DISCOVERY, INGESTION
+from leo_pipeline import qa as qa_engine
+from leo_pipeline.config import ANALYSIS, DISCOVERY, INGESTION, QA
 from leo_pipeline.state import DataManifest, DatasetCandidate
 
 # Statements the read-only query tool will accept. Anything else (INSERT, COPY,
@@ -1226,6 +1229,193 @@ async def find_clear_sky_spot(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+# --- A4 validation / QA tools ---------------------------------------------------------
+# The QA agent reasons only about *triage* (explain a flagged anomaly, decide if it routes to
+# the H2 human gate); these tools do the deterministic stats + anomaly rules over the input
+# table and the A3 findings (leo_pipeline.qa) and never mutate run state or publish anything.
+# See docs/architecture.md (A4, §5 failure handling, §7 H2 gate).
+
+
+def _resolve_aoi(arg: Any) -> list[float]:
+    """AOI bbox for the input audit: an explicit arg, else the A1 manifest's aoi_bbox,
+    else the QA spec default (the confirmed AOI)."""
+    if isinstance(arg, (list, tuple)) and len(arg) == 4:
+        return [float(x) for x in arg]
+    try:
+        manifest = json.loads(DISCOVERY.manifest_path.read_text())
+        bbox = manifest.get("aoi_bbox")
+        if isinstance(bbox, list) and len(bbox) == 4:
+            return [float(x) for x in bbox]
+    except Exception:
+        pass
+    return list(QA.aoi_bbox)
+
+
+def _load_findings(
+    findings_arg: Any, findings_dir: Path, tile: str | None
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Resolve the A3 findings to QA: an inline ``findings`` list, else the per-tile JSON
+    files A3 wrote to ``findings_dir`` (optionally just one ``tile``). Returns
+    (findings, source_files)."""
+    if isinstance(findings_arg, list) and findings_arg:
+        return [f for f in findings_arg if isinstance(f, dict)], ["<inline>"]
+    if not findings_dir.exists():
+        return [], []
+    pattern = f"findings_{tile}.json" if tile else "findings_*.json"
+    findings: list[dict[str, Any]] = []
+    sources: list[str] = []
+    for path in sorted(findings_dir.glob(pattern)):
+        try:
+            rows = json.loads(path.read_text())
+        except Exception:
+            continue
+        if isinstance(rows, list):
+            findings.extend(r for r in rows if isinstance(r, dict))
+            sources.append(path.name)
+    return findings, sources
+
+
+def _coord_id(location_id: Any) -> int | None:
+    """Parse the ``coord_<id>`` work-item id A3 stamps back to its integer coord_id."""
+    s = str(location_id or "")
+    if s.startswith("coord_"):
+        try:
+            return int(s[len("coord_") :])
+        except ValueError:
+            return None
+    return None
+
+
+def _county_weight_maps(
+    findings: list[dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, float]]:
+    """Best-effort {location_id -> county FIPS} and {location_id -> n_locations weight} for
+    the findings, joined through the dedup maps + the locations CSV. The county FIPS is the
+    first 5 digits of the 15-digit ``geoid_cb`` census block (state[2] + county[3]).
+
+    Enables the county grouping and household-weighted regional rates when the
+    ``unique_coords``/``location_coord_map`` Parquet and the CSV are on disk; returns empty
+    maps (tile-only grouping, unit weights) when they're absent or unreadable. Restricted to
+    the coord_ids actually in the findings, so QA over a few tiles never scans all 4.5M coords.
+    """
+    coord_ids = {cid for f in findings if (cid := _coord_id(f.get("location_id"))) is not None}
+    if not coord_ids:
+        return {}, {}
+    interim = ingest.PATHS.data_interim
+    unique_path = interim / ingest.UNIQUE_COORDS_FILE
+    map_path = interim / ingest.LOCATION_MAP_FILE
+    csv_path = ingest.PATHS.locations_csv
+    if not (unique_path.exists() and map_path.exists() and csv_path.exists()):
+        return {}, {}
+    try:
+        con = ingest.connect()  # CSV exposed as `locations`
+    except FileNotFoundError:
+        return {}, {}
+    try:
+        id_list = ",".join(str(c) for c in sorted(coord_ids))
+        uq = str(unique_path).replace("'", "''")
+        mp = str(map_path).replace("'", "''")
+        rows = con.execute(
+            f"""
+            WITH uq AS (
+                SELECT coord_id, n_locations FROM read_parquet('{uq}')
+                WHERE coord_id IN ({id_list})
+            ),
+            cmap AS (SELECT location_id, coord_id FROM read_parquet('{mp}'))
+            -- geoid_cb is a 15-digit census BLOCK; the first 5 digits are the county FIPS
+            -- (state[2] + county[3]) — the meaningful "county at 100% at-risk" grouping unit.
+            SELECT uq.coord_id, uq.n_locations,
+                   substr(CAST(min(l.geoid_cb) AS VARCHAR), 1, 5) AS county
+            FROM uq
+            JOIN cmap USING (coord_id)
+            JOIN locations l ON l.location_id = cmap.location_id
+            GROUP BY uq.coord_id, uq.n_locations
+            """
+        ).fetchall()
+    except Exception:
+        return {}, {}
+    finally:
+        con.close()
+    county_of: dict[str, str] = {}
+    weight_of: dict[str, float] = {}
+    for coord_id, n_locations, county in rows:
+        lid = f"coord_{int(coord_id)}"
+        weight_of[lid] = float(n_locations or 1)
+        if county is not None:
+            county_of[lid] = str(county)
+    return county_of, weight_of
+
+
+@tool(
+    "qa_input_audit",
+    "Audit the raw locations table for quarantine-worthy input rows and summarise each "
+    "bucket (architecture §5 'bad input row'): null / out-of-range coordinates, the (0,0) "
+    "null island, points outside the AOI, and lat/lon-swapped rows. Read-only and counts "
+    "only (the ~4.7M-row table is never materialised) — de-dup itself is the deterministic "
+    "ingest pre-step; this re-audits and sizes the quarantine queue. `aoi_bbox` is an "
+    "optional [min_lon,min_lat,max_lon,max_lat] override (defaults to the A1 manifest's AOI, "
+    "else the QA spec default). Returns {total_rows, distinct_coords, quarantine_total, "
+    "quarantine_rate, swapped_suspect, issues:[{kind,count,detail}]}.",
+    {"aoi_bbox": list},
+)
+async def qa_input_audit(args: dict[str, Any]) -> dict[str, Any]:
+    aoi = _resolve_aoi(args.get("aoi_bbox"))
+    try:
+        con = ingest.connect()
+    except FileNotFoundError as exc:
+        return _error(f"locations CSV not found for the input audit: {exc}")
+    try:
+        counts = qa_engine.input_quality_counts(con, aoi)
+    except Exception as exc:
+        return _error(str(exc))
+    finally:
+        con.close()
+    report = qa_engine.input_quality_report(counts, aoi)
+    report["aoi_bbox"] = aoi
+    report["qa_spec_version"] = QA.qa_spec_version
+    return _text(report)
+
+
+@tool(
+    "qa_location_batch",
+    "Scan a batch of A3 obstruction findings for output anomalies (architecture §5) and "
+    "return a QA report for the H2 gate. Deterministic stats + rules — you do NOT re-score "
+    "here. Rules: a region (tile, and county when the dedup maps are on disk) implausibly "
+    "saturated with at-risk locations; a risk_tier that disagrees with its own "
+    "obstruction_pct under the spec bands; too many undetermined / low-confidence scores; a "
+    "degenerate all-identical distribution; mixed spec_version. Pass findings inline via "
+    "`findings` (a list of A3 result dicts), or omit it to load the per-tile findings A3 "
+    "wrote to data/interim/analysis (optionally just one `tile`). Returns {qa_spec_version, "
+    "summary, grouped_by, n_anomalies, review_required, has_critical, "
+    "anomalies:[{rule,severity,scope,detail,metric,threshold,sample_ids}]}.",
+    {"findings": list, "tile": str, "findings_dir": str},
+)
+async def qa_location_batch(args: dict[str, Any]) -> dict[str, Any]:
+    findings_dir = (
+        Path(args["findings_dir"]).expanduser()
+        if args.get("findings_dir")
+        else ANALYSIS.findings_dir
+    )
+    tile = (args.get("tile") or "").strip() or None
+    findings, sources = _load_findings(args.get("findings"), findings_dir, tile)
+    if not findings:
+        return _error(
+            "no findings to QA — pass `findings` inline, or run the analysis first "
+            f"(python -m leo_pipeline.run_analysis --compute); looked in {findings_dir}"
+        )
+    county_of, weight_of = _county_weight_maps(findings)
+    report = qa_engine.run_output_qa(
+        findings, county_of=county_of or None, weight_of=weight_of or None
+    )
+    report["n_findings"] = len(findings)
+    report["sources"] = sources
+    if not county_of:
+        report.setdefault("notes", []).append(
+            "county grouping skipped (dedup maps / locations CSV not on disk); tile grouping only"
+        )
+    return _text(report)
+
+
 # In-process MCP server bundling the tools above. Reference its name in
 # ClaudeAgentOptions(mcp_servers=...) and allow the "mcp__leo__<tool>" identifiers.
 LEO_TOOLS_SERVER = create_sdk_mcp_server(
@@ -1243,6 +1433,8 @@ LEO_TOOLS_SERVER = create_sdk_mcp_server(
         cache_rw,
         compute_sky_obstruction,
         find_clear_sky_spot,
+        qa_input_audit,
+        qa_location_batch,
     ],
 )
 
@@ -1259,4 +1451,6 @@ TOOL_NAMES = [
     "mcp__leo__cache_rw",
     "mcp__leo__compute_sky_obstruction",
     "mcp__leo__find_clear_sky_spot",
+    "mcp__leo__qa_input_audit",
+    "mcp__leo__qa_location_batch",
 ]

@@ -227,11 +227,60 @@ class Analysis:
     findings_dir: Path = REPO_ROOT / "data" / "interim" / "analysis"
 
 
+@dataclass(frozen=True)
+class QA:
+    """The QA SPEC for the A4 validation/QA agent — a pre-approved, version-stamped
+    config of anomaly thresholds, NOT generated at runtime (mirrors ``Analysis``).
+
+    A4 has two deterministic checks (architecture.md §5, the A4 node):
+      - **input quality** over the raw locations table (bad rows → a quarantine queue:
+        null/out-of-range coordinates, the (0,0) null island, points outside the AOI,
+        and lat/lon-swapped rows). Coordinate de-dup itself is the deterministic ingest
+        pre-step (``leo_pipeline.ingest``); A4 re-audits and quarantines.
+      - **output anomalies** over the A3 obstruction findings: a region implausibly
+        saturated with at-risk locations (the "a county at 100 % at-risk" example), a
+        risk_tier that disagrees with its own ``obstruction_pct`` under the spec bands,
+        too many ``undetermined`` / low-confidence scores, a degenerate (all-identical)
+        distribution, or mixed ``spec_version`` across one run.
+    The code computes the stats + fires these rules; the LLM only triages/explains the
+    flagged anomalies and decides whether to route them to the H2 human gate.
+    """
+
+    # Version stamp recorded on every QA report so an audit is reproducible (architecture
+    # §4 versioning). Bump when any threshold below changes.
+    qa_spec_version: str = "qa-2026.06-v1"
+
+    # --- input-quality / quarantine ---
+    # Default AOI (the confirmed Carolinas/N-Georgia box) used to flag off-AOI and
+    # lat/lon-swapped rows when no AOI is supplied by the caller (manifest / CSV bbox).
+    aoi_bbox: tuple[float, float, float, float] = (-84.32, 33.84, -75.46, 36.59)
+
+    # --- output-anomaly thresholds ---
+    # A region (tile or county) is flagged when at least this share of its scored
+    # locations land in an at-risk tier (at_risk|severe) — the "100 % at-risk" smell.
+    saturated_region_rate: float = 0.95
+    # Don't call a handful of points a "region": only group with at least this many
+    # scored locations is eligible for the saturation / degenerate-distribution rules.
+    min_region_size: int = 30
+    # A group of at least this many scored locations whose obstruction_pct are all identical
+    # AND non-zero is suspicious (a stuck sampler / constant surface). An all-zero region is
+    # the common benign "open/flat, genuinely clear" case, so it is deliberately not flagged.
+    degenerate_group_min: int = 20
+    # Run-level coverage rules: flag when the share of undetermined (no surface under the
+    # point) or low-confidence scores exceeds these — the surface data is too thin to trust.
+    max_undetermined_rate: float = 0.20
+    max_low_confidence_rate: float = 0.30
+
+    # Where run_qa persists the QA report (the H2 review artifact).
+    reports_dir: Path = REPO_ROOT / "data" / "interim" / "qa"
+
+
 PATHS = Paths()
 MODELS = Models()
 DISCOVERY = Discovery()
 INGESTION = Ingestion()
 ANALYSIS = Analysis()
+QA = QA()
 
 
 def require_api_key() -> str:

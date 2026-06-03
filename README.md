@@ -14,29 +14,31 @@ Methodology, Starlink reception geometry, and tuneable parameters documented
 search → ranked data manifest), and the **A2 surface-ingestion agent** (live windowed COG
 read → reproject → fused pseudo-DSM per tile), and the **A3 analysis agent** (live
 per-azimuth horizon profile → dwell-weighted obstruction % → `clear`/`at_risk`/`severe`/
-`undetermined` tier, plus a "find a clearer spot / mast height" search) are all live, with
-standalone `leo-discovery` / `leo-tiling` / `leo-ingestion` / `leo-analysis` CLIs and a
-deterministic `tests/` suite (offline; opt-in live tests). A3's `leo-analysis --compute`
-runs the same horizon engine without an API call. Remaining: reporting/insight (A5). See the
-[decision log](#decision-log).
+`undetermined` tier, plus a "find a clearer spot / mast height" search), and the **A4
+validation/QA agent** (live input-quality audit + output-anomaly scan → an H2 review verdict)
+are all live, with standalone `leo-discovery` / `leo-tiling` / `leo-ingestion` /
+`leo-analysis` / `leo-qa` CLIs and a deterministic `tests/` suite (offline; opt-in live
+tests). A3's `leo-analysis --compute` and A4's `leo-qa --compute` run the same engines without
+an API call. Remaining: reporting/insight (A5). See the [decision log](#decision-log).
 
 ## Layout
 
 ```
 docs/        architecture, rationale, data-sources (+ Mermaid diagram)
 src/leo_pipeline/
-  config.py        models, paths, env loading; Discovery (A1) + Ingestion (A2) + Analysis (A3) knobs
+  config.py        models, paths, env loading; Discovery (A1) + Ingestion (A2) + Analysis (A3) + QA (A4) knobs
   orchestrator.py  wires tools + agents into Claude Agent SDK options
   ingest.py        deterministic input profiling + coordinate de-duplication (pre-step)
   tiling.py        deterministic UTM tiling of the unique-coordinate work list (pre-step)
   horizon.py       deterministic per-azimuth horizon / obstruction engine (A3 core)
-  run_discovery.py / run_ingestion.py / run_analysis.py   standalone A1 / A2 / A3 CLIs
-  agents/          ingestion (A2) · data-discovery (A1) · geo-analysis (A3) · qa (least-privilege)
+  qa.py            deterministic input-quality + output-anomaly engine (A4 core)
+  run_discovery.py / run_ingestion.py / run_analysis.py / run_qa.py   standalone A1 / A2 / A3 / A4 CLIs
+  agents/          ingestion (A2) · data-discovery (A1) · geo-analysis (A3) · qa (A4) (least-privilege)
   tools/           @tool defs + in-process SDK MCP server ("leo")
-  state/           PipelineState (+ SurfaceTile, ObstructionResult) threaded between agents
+  state/           PipelineState (+ SurfaceTile, ObstructionResult, QAAnomaly) threaded between agents
 notebooks/   00_data_inspection.ipynb — first-pass CSV profiling
 data/raw/    provided locations.csv (gitignored; supplied by the challenge)
-data/interim/  de-dup work list, tiles, data_manifest.json, surfaces/ cache, analysis/ findings (gitignored)
+data/interim/  de-dup work list, tiles, data_manifest.json, surfaces/ cache, analysis/ findings, qa/ reports (gitignored)
 resources/   Starlink Install Guide PDF (supplied by the challenge)
 outputs/     generated maps / figures (gitignored)
 ```
@@ -130,12 +132,14 @@ LEO_RUN_LIVE=1 ../../.venv/bin/python -m pytest -m live -k ingestion   # real DE
 | Analysis rationale & methodology | `docs/rationale.md` |
 | Data sourcing & quality | `docs/data-sources.md`, `notebooks/00_data_inspection.ipynb`; live `data-discovery` agent + `stac_search`/`write_data_manifest` (`src/leo_pipeline/`) |
 | Search / download agents (live) | A1 `data-discovery` (`stac_search`) + A2 `ingestion` (`stac_item_read`/`fetch_aligned_surface`/`cache_rw`), `src/leo_pipeline/` |
+| Validation / QA (live) | A4 `qa` agent + `qa_input_audit`/`qa_location_batch` (`src/leo_pipeline/qa.py`, `config.QA`) |
 | AI-tool disclosure | `AI_TOOLS.md` |
 
 ## Decision log
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
+| 2026-06-03 | **Build the A4 validation/QA agent** — live input-quality audit + output-anomaly scan → H2 verdict | Wired the last core role into `src/`: a deterministic `qa.py` engine + a version-stamped `config.QA` spec, behind two least-privilege tools — `qa_input_audit` (one DuckDB pass over the locations table sizing the quarantine buckets: null / out-of-range coords, the (0,0) null island, off-AOI points, lat/lon-swapped rows) and `qa_location_batch` (output-anomaly rules over the A3 findings: a region implausibly **saturated** with at-risk locations — grouped by **tile**, and by **county FIPS** when the dedup maps are on disk, household-weighted by `n_locations` — plus risk-tier↔`obstruction_pct` **inconsistency**, undetermined / low-confidence **coverage budgets**, a non-zero **degenerate distribution**, and `spec_version` **drift**). Added a `QAAnomaly` state record and a standalone `leo-qa` CLI with a no-API `--compute` path. Per the [architecture](docs/architecture.md) split, **the rules detect; the LLM only triages** an anomaly (cross-checking with `query_locations` / `web_fetch`) and decides what routes to the **H2** human gate — a `critical` anomaly (tier↔pct, out-of-range, spec drift) blocks an auto-publish, never a silent pass. Scope chosen with the user: **both** input quality + output anomalies, and **both** tile + county grouping. Added 35 offline tests (engine + tools + CLI; in-memory DuckDB for the input audit). Verified end-to-end offline: the input audit runs over the real 4.67M-row CSV and a saturated synthetic tile flags both tile- and county-level anomalies. **Not yet agentically verified** (no live A4 agent run — same API-key budget block as A2/A3); the deterministic engine + tool wiring are verified offline. |
 | 2026-06-03 | **Build the A3 analysis agent** — live per-azimuth horizon profile → obstruction % → risk tier | Wired the analytical core into `src/`: a deterministic `horizon.py` engine (bilinear surface sampler + ray-marched per-azimuth horizon `H(φ) = max_r arctan((Z_surface − Z_dish)/r)`, dwell-time-weighted blocked-sky fraction over the dish's azimuth cone, three-state tiering) and the two architecture A3 tools — `compute_sky_obstruction` (batch-per-tile scoring → `obstruction_pct`, `blocked_azimuths`, `clear`/`at_risk`/`severe`/`undetermined` tier, confidence) and `find_clear_sky_spot` (grid + mast-height search for a lower-obstruction position, scenario 3). Added an `Analysis` **version-stamped obstruction spec** (the pre-approved θ/cone/azimuth-weighting/band config — `SPEC` node, not generated at runtime), an `ObstructionResult` state record, and a standalone `leo-analysis` CLI with a no-API `--compute` path that runs the same engine directly. The LLM only picks parameters (mount-height sweep, relaxing θ) and handles edges; all geometry is deterministic and vectorized. **Replaced** the placeholder `lookup_obstruction_layer`/`compute_risk_score` stubs with these real tools. **Deferred:** σ_H folded into the confidence flag rather than a full probabilistic clearance-margin model, and `az_weighting='tle_derived'` falls back to the static north-biased gradient. Added 25 offline tests (real-GeoTIFF surfaces). **Not yet agentically verified** (no live A3 agent run); the deterministic engine is verified offline. |
 | 2026-06-03 | **Build the A2 surface-ingestion agent** — live windowed COG read → reproject → fused pseudo-DSM per tile | Wired the second "search/download" role into `src/`: a new `ingestion` agent (A2) with three least-privilege tools — `stac_item_read` (resolve an approved collection to a signed, download-ready COG for a tile), `fetch_aligned_surface` (windowed `rasterio` read + reproject to the tile's UTM zone + fuse `DEM + max(canopy, building)` into a pseudo-DSM, or pass a true lidar DSM through; tile-keyed, content-addressed, idempotent cache), and `cache_rw` (skip already-built tiles). Added an `Ingestion` config block, a deterministic `tiling.py` pre-step (4.51M unique coords → 5,176 UTM tiles, ~872 coords/tile — the O(tiles) batching unit), a `SurfaceTile` state record, and a standalone `leo-ingestion` CLI. The LLM's only judgement is **which fallback to take on a read failure** (true_dsm → pseudo_dsm → cover_proxy, with lowered confidence); all raster math is deterministic. **Verified live** end-to-end (no API key needed): a real Copernicus GLO-30 DEM window resolved via STAC, signed, read, reprojected to UTM @10 m, and written as a GeoTIFF. **Repurposed the old POC `ingestion` agent** (input load + de-dup): that duty is now a deterministic pre-step (`python -m leo_pipeline.ingest` / `tiling`), not an agent — its `query_locations`/`deduplicate_coordinates` tools stay served and runnable. **Deferred:** building-footprint rasterization (pseudo-DSM currently fuses DEM + canopy) and a full `cover_proxy` (DEM-only, low-confidence for now). Added 40 offline tests + 1 opt-in live COG-read test. |
 | 2026-06-03 | **Add a standalone `leo-discovery` CLI + a `tests/` suite, and fix the AOI-override point count** | Wrapped A1 in `python -m leo_pipeline.run_discovery` (`--bbox`/`--out`/`--allow-fallback`/`--dry-run`) so a manifest can be produced for any AOI without the locations CSV, via a process-level `tools.AOI_OVERRIDE`. Added deterministic, offline pytest coverage of the A1 tools + agent contract (one opt-in live test gated on `LEO_RUN_LIVE=1`). **Fixed a bug:** with a `--bbox` override, `get_aoi_bbox` hardcoded `n_total/n_distinct = 0`, so the agent wrote a misleading "CSV had 0 points" note even when the box was full of points; it now counts the CSV points actually inside the override box (new `ingest.count_in_bbox`), e.g. 92,823 points for the central-NC `[-80,35,-78.5,35.1]` box, and still returns 0 only when no CSV is present. |
