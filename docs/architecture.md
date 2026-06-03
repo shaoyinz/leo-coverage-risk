@@ -4,7 +4,7 @@ The orchestration layer. Six agent roles, the tools they may call, how state and
 
 > Governing principles (see [README](../README.md)): **(1)** LLMs orchestrate and reason; deterministic geospatial code computes. **(2)** LLM cost is O(tiles/agents/run), never O(locations).
 
-> **What this repo implements.** The code ships a 4-agent proof-of-concept — `ingestion` (input load + data QA), **`data-discovery`** (A1; live STAC catalog + web search → ranked data manifest), `geo-analysis` (per-location obstruction sampling + risk scoring), and `qa` (output anomaly checks) — defined in [`src/leo_pipeline/agents`](../src/leo_pipeline/agents/__init__.py). **A1 is live:** `get_aoi_bbox`, `stac_search` (pystac-client over Microsoft Planetary Computer), and `write_data_manifest` return real results and persist the manifest the H1 gate reviews ([`src/leo_pipeline/tools`](../src/leo_pipeline/tools/__init__.py)). It can be driven on its own via `python -m leo_pipeline.run_discovery` (with an optional `--bbox` AOI override, against which `get_aoi_bbox` counts the locations actually inside the box), and is covered by an offline `tests/` suite. That POC covers the **core** of the six-role design below; the remaining roles (tiled ingestion A2, reporting A5) and the horizon toolset are the target architecture this document specifies, not yet wired into `src/`.
+> **What this repo implements.** The code ships a 4-agent proof-of-concept — **`data-discovery`** (A1; live STAC catalog + web search → ranked data manifest), **`ingestion`** (A2; live per-tile COG fetch + align → aligned pseudo-DSM), `geo-analysis` (A3; per-location obstruction sampling + risk scoring), and `qa` (A4; output anomaly checks) — defined in [`src/leo_pipeline/agents`](../src/leo_pipeline/agents/__init__.py). Input profiling + coordinate de-dup and UTM tiling are deterministic pre-steps ([`ingest.py`](../src/leo_pipeline/ingest.py) / [`tiling.py`](../src/leo_pipeline/tiling.py)), not an agent. **A1 is live:** `get_aoi_bbox`, `stac_search` (pystac-client over Microsoft Planetary Computer), and `write_data_manifest` return real results and persist the manifest the H1 gate reviews; driven on its own via `python -m leo_pipeline.run_discovery` (with an optional `--bbox` AOI override, against which `get_aoi_bbox` counts the locations actually inside the box). **A2 is live:** `stac_item_read` (resolve an approved collection to a signed, download-ready COG for a tile), `fetch_aligned_surface` (windowed rasterio read → reproject to the tile's auto-UTM zone → fuse `DEM + max(canopy, building)` into a pseudo-DSM, or pass a true lidar DSM through; tile-keyed, content-addressed, idempotent cache), and `cache_rw` ([`src/leo_pipeline/tools`](../src/leo_pipeline/tools/__init__.py)); driven on its own via `python -m leo_pipeline.run_ingestion`. Both are covered by an offline `tests/` suite (plus opt-in live tests). Two **deferred gaps** in A2's live core: building-footprint rasterization (the pseudo-DSM currently fuses DEM + canopy only) and a full `cover_proxy` (DEM-only, low-confidence for now). That POC covers the **core** of the six-role design below; the remaining role (reporting A5) and the horizon toolset are the target architecture this document specifies, not yet wired into `src/`.
 
 ---
 
@@ -107,6 +107,13 @@ The challenge asks for explicit tool schemas. Here are the four load-bearing one
       "surface_mode": {"type":"string","enum":["true_dsm","pseudo_dsm","cover_proxy"]} },
     "required":["tile_id","bbox","manifest"] },
   "returns": "{dsm_uri, dem_uri, crs, gsd_m, vintage_map, coverage_flag}" }
+// shipped & live (src/leo_pipeline/tools): windowed rasterio read + reproject (auto-UTM) +
+// numpy fuse, writing a tile-keyed content-addressed GeoTIFF cache; returns also `confidence`
+// + `valid_fraction`. On a layer read failure it returns a structured error naming the next
+// surface_mode down the hierarchy, so the LLM's only call is which fallback to retry. A
+// companion `stac_item_read` resolves an A1 collection to a signed COG href per tile, and
+// `cache_rw` lets the agent skip already-built tiles. Deferred: building-footprint fusion
+// (pseudo-DSM = DEM + canopy for now) and a full cover_proxy (DEM-only, low confidence).
 
 // A3 — the analytical core (scenario 2: "does this location have enough visibility?")
 { "name": "compute_sky_obstruction",

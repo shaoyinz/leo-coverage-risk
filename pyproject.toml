@@ -44,9 +44,11 @@ dev = [
 ]
 
 [project.scripts]
-# One-shot entrypoint for the A1 data-discovery agent (after `pip install -e .`);
-# without reinstalling, use `python -m leo_pipeline.run_discovery`.
-leo-discovery = "leo_pipeline.run_discovery:main"
+# One-shot entrypoints for the agents (after `pip install -e .`); without reinstalling,
+# use `python -m leo_pipeline.run_discovery` / `run_ingestion` / `tiling`.
+leo-discovery = "leo_pipeline.run_discovery:main"   # A1: data manifest
+leo-tiling = "leo_pipeline.tiling:main"             # tile the de-duplicated work list
+leo-ingestion = "leo_pipeline.run_ingestion:main"   # A2: aligned per-tile surfaces
 
 [tool.setuptools.packages.find]
 where = ["src"]

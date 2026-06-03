@@ -10,24 +10,29 @@ Submission for the Ready Builders Challenge
 ## Status
 
 Methodology, Starlink reception geometry, and tuneable parameters documented
-(`docs/rationale.md`); ingestion/de-duplication and the **data-discovery agent** (live
-STAC search → ranked data manifest) are live, with a standalone `leo-discovery` CLI and a
-deterministic `tests/` suite (offline; one opt-in live test); obstruction & risk tools are
-schema-defined stubs pending the per-coordinate sampling work. See the
-[decision log](#decision-log).
+(`docs/rationale.md`); de-duplication + tiling, the **A1 data-discovery agent** (live STAC
+search → ranked data manifest), and the **A2 surface-ingestion agent** (live windowed COG
+read → reproject → fused pseudo-DSM per tile) are all live, with standalone `leo-discovery`
+/ `leo-tiling` / `leo-ingestion` CLIs and a deterministic `tests/` suite (offline; opt-in
+live tests). The A3 obstruction & risk tools are schema-defined stubs pending the horizon
+pass. See the [decision log](#decision-log).
 
 ## Layout
 
 ```
 docs/        architecture, rationale, data-sources (+ Mermaid diagram)
 src/leo_pipeline/
-  config.py        models, paths, env loading
+  config.py        models, paths, env loading; Discovery (A1) + Ingestion (A2) knobs
   orchestrator.py  wires tools + agents into Claude Agent SDK options
-  agents/          ingestion · data-discovery · geo-analysis · qa (least-privilege tool access)
+  ingest.py        deterministic input profiling + coordinate de-duplication (pre-step)
+  tiling.py        deterministic UTM tiling of the unique-coordinate work list (pre-step)
+  run_discovery.py / run_ingestion.py   standalone A1 / A2 CLIs
+  agents/          ingestion (A2) · data-discovery (A1) · geo-analysis · qa (least-privilege)
   tools/           @tool defs + in-process SDK MCP server ("leo")
-  state/           PipelineState threaded between agents
+  state/           PipelineState (+ SurfaceTile) threaded between agents
 notebooks/   00_data_inspection.ipynb — first-pass CSV profiling
 data/raw/    provided locations.csv (gitignored; supplied by the challenge)
+data/interim/  de-dup work list, tiles, data_manifest.json, surfaces/ cache (gitignored)
 resources/   Starlink Install Guide PDF (supplied by the challenge)
 outputs/     generated maps / figures (gitignored)
 ```
@@ -67,10 +72,27 @@ optional custom AOI (no locations CSV required):
 When a `--bbox` AOI is supplied and the locations CSV is present, the agent reports how
 many of its points fall **inside** that box (not just the box itself).
 
-Tests (offline by default; the one live agent test is gated on `LEO_RUN_LIVE=1`):
+Tile the de-duplicated work list, then run the **A2 surface-ingestion agent** to build one
+aligned pseudo-DSM (or true lidar DSM) per tile from the H1-approved manifest:
 
 ```bash
-../../.venv/bin/python -m pytest          # deterministic unit + contract tests
+../../.venv/bin/python -m leo_pipeline.tiling                              # unique coords → UTM tiles
+../../.venv/bin/python -m leo_pipeline.run_ingestion --limit 3 --dry-run   # resolve manifest+tiles, no API
+../../.venv/bin/python -m leo_pipeline.run_ingestion --limit 3             # drive A2 (needs ANTHROPIC_API_KEY)
+../../.venv/bin/python -m leo_pipeline.run_ingestion --bbox -80 35 -79.95 35.05  # ingest an ad-hoc area
+```
+
+A2 reads only COG **windows** for each tile, reprojects to the tile's UTM zone, and fuses
+`DEM + max(canopy, building)` into a pseudo-DSM (or passes a true lidar DSM through),
+writing a tile-keyed, content-addressed cache under `data/interim/surfaces/` — re-running a
+tile with unchanged inputs is a no-op. (Building-height fusion is a documented deferred gap;
+pseudo-DSM currently fuses DEM + canopy.)
+
+Tests (offline by default; the live COG-read + live agent tests are gated on `LEO_RUN_LIVE=1`):
+
+```bash
+../../.venv/bin/python -m pytest                                  # deterministic unit + contract tests
+LEO_RUN_LIVE=1 ../../.venv/bin/python -m pytest -m live -k ingestion   # real DEM window read (no API key)
 ```
 
 ## Step-0 pre-work (from the Install Guide)
@@ -103,12 +125,14 @@ Tests (offline by default; the one live agent test is gated on `LEO_RUN_LIVE=1`)
 | State management between agents | `src/leo_pipeline/state/` |
 | Analysis rationale & methodology | `docs/rationale.md` |
 | Data sourcing & quality | `docs/data-sources.md`, `notebooks/00_data_inspection.ipynb`; live `data-discovery` agent + `stac_search`/`write_data_manifest` (`src/leo_pipeline/`) |
+| Search / download agents (live) | A1 `data-discovery` (`stac_search`) + A2 `ingestion` (`stac_item_read`/`fetch_aligned_surface`/`cache_rw`), `src/leo_pipeline/` |
 | AI-tool disclosure | `AI_TOOLS.md` |
 
 ## Decision log
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
+| 2026-06-03 | **Build the A2 surface-ingestion agent** — live windowed COG read → reproject → fused pseudo-DSM per tile | Wired the second "search/download" role into `src/`: a new `ingestion` agent (A2) with three least-privilege tools — `stac_item_read` (resolve an approved collection to a signed, download-ready COG for a tile), `fetch_aligned_surface` (windowed `rasterio` read + reproject to the tile's UTM zone + fuse `DEM + max(canopy, building)` into a pseudo-DSM, or pass a true lidar DSM through; tile-keyed, content-addressed, idempotent cache), and `cache_rw` (skip already-built tiles). Added an `Ingestion` config block, a deterministic `tiling.py` pre-step (4.51M unique coords → 5,176 UTM tiles, ~872 coords/tile — the O(tiles) batching unit), a `SurfaceTile` state record, and a standalone `leo-ingestion` CLI. The LLM's only judgement is **which fallback to take on a read failure** (true_dsm → pseudo_dsm → cover_proxy, with lowered confidence); all raster math is deterministic. **Verified live** end-to-end (no API key needed): a real Copernicus GLO-30 DEM window resolved via STAC, signed, read, reprojected to UTM @10 m, and written as a GeoTIFF. **Repurposed the old POC `ingestion` agent** (input load + de-dup): that duty is now a deterministic pre-step (`python -m leo_pipeline.ingest` / `tiling`), not an agent — its `query_locations`/`deduplicate_coordinates` tools stay served and runnable. **Deferred:** building-footprint rasterization (pseudo-DSM currently fuses DEM + canopy) and a full `cover_proxy` (DEM-only, low-confidence for now). Added 40 offline tests + 1 opt-in live COG-read test. |
 | 2026-06-03 | **Add a standalone `leo-discovery` CLI + a `tests/` suite, and fix the AOI-override point count** | Wrapped A1 in `python -m leo_pipeline.run_discovery` (`--bbox`/`--out`/`--allow-fallback`/`--dry-run`) so a manifest can be produced for any AOI without the locations CSV, via a process-level `tools.AOI_OVERRIDE`. Added deterministic, offline pytest coverage of the A1 tools + agent contract (one opt-in live test gated on `LEO_RUN_LIVE=1`). **Fixed a bug:** with a `--bbox` override, `get_aoi_bbox` hardcoded `n_total/n_distinct = 0`, so the agent wrote a misleading "CSV had 0 points" note even when the box was full of points; it now counts the CSV points actually inside the override box (new `ingest.count_in_bbox`), e.g. 92,823 points for the central-NC `[-80,35,-78.5,35.1]` box, and still returns 0 only when no CSV is present. |
 | 2026-06-03 | **Build the A1 data-discovery agent** — live STAC search + ranked data manifest | Wired the discovery role into `src/`: a `DATA_DISCOVERY_AGENT` plus three live tools — `get_aoi_bbox` (AOI from the locations), `stac_search` (pystac-client over Microsoft Planetary Computer), and `write_data_manifest` (persists the H1-review manifest to `data/interim/`). The agent ranks candidates by resolution/vintage/coverage/licence and is granted `WebSearch`/`WebFetch` to source **tree-canopy height**, which no Planetary Computer collection carries (verified, 134 collections). Confirmed live against the real AOI (Carolinas/N-Georgia): real items returned for 3DEP (10 m), Copernicus GLO-30, NASADEM, and MS Buildings. Filled `docs/data-sources.md` with the curated candidate catalog; added `pystac-client`/`planetary-computer` deps. Keeps the LLM-ranks / code-queries split and writes no rasters (manifest only). |
 | 2026-06-03 | **Complete `docs/rationale.md`** — approach justification, plain-language "at-risk" definition, and a consolidated **Tuneable parameters** registry | Justified the per-azimuth horizon-profile approach over a simple buffer, a binary viewshed, and ML obstruction detection; wrote a stakeholder-facing definition of the `clear`/`at-risk`/`undetermined` bands; and consolidated every modeling knob (θ, FOV cone, azimuth weighting, mount-height sweep, σ_H budget, band cut-points, search window, CRS, dedup precision) into one registry with defaults + sensitivities. Added a **per-class, derived** obstacle search radius `R_max = (H_class,max − H_a) / tan θ_min`, and rejected a single global radius as the fixed-buffer anti-pattern. **Considered then rolled back** a per-class RF-opacity weighting (trees attenuate less than opaque buildings/terrain): without canopy-depth data it risks false `clear` verdicts for forest-ringed homes, so all obstacles remain uniform opaque blockers. |

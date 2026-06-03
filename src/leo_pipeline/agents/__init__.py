@@ -11,22 +11,52 @@ from claude_agent_sdk import AgentDefinition
 
 from leo_pipeline.config import MODELS
 
-# --- Ingestion & data-quality agent ---------------------------------------------------
-# Scope: load the provided locations CSV, profile it, and flag quality issues.
-# Tools: query_locations only (read-only SQL). No obstruction/raster access.
+# --- Surface-ingestion agent (A2) -----------------------------------------------------
+# Scope: turn the H1-approved data manifest into ONE aligned elevation surface per tile —
+# windowed COG read, reproject to a metric CRS, fuse a pseudo-DSM (or pass through a true
+# lidar DSM). Writes only the tile-keyed surface cache; never scores risk, never fetches
+# the open web. The LLM's only judgement call is which fallback to use when a read fails.
+# (Input-profiling + coordinate de-dup is a deterministic pre-step — `python -m
+# leo_pipeline.ingest` / `leo_pipeline.tiling` — not an agent role.)
 INGESTION_AGENT = AgentDefinition(
-    description="Loads and profiles the provided locations dataset; flags data-quality issues.",
-    prompt=(
-        "You are the data-ingestion agent. Profile the provided locations dataset using "
-        "the query_locations tool: row counts, null/duplicate coordinates, out-of-range "
-        "lat/lon, and other anomalies. Report findings as structured quality issues. Then "
-        "call deduplicate_coordinates to collapse the location-grained input to one work "
-        "item per unique coordinate (writing the unique-coordinate work list and the "
-        "location_id->coord_id fan-out map to data/interim) so the downstream obstruction "
-        "sampling runs once per coordinate, not once per location. Report the reduction. "
-        "Do not attempt risk analysis."
+    description=(
+        "Fetches COG windows per tile, reprojects to a metric CRS, and fuses an aligned "
+        "pseudo-DSM (or passes through a true lidar DSM) for the approved datasets."
     ),
-    tools=["mcp__leo__query_locations", "mcp__leo__deduplicate_coordinates"],
+    prompt=(
+        "You are the surface-ingestion agent (A2 in docs/architecture.md). Given the "
+        "H1-approved data manifest and a list of tiles (tile_id + bbox), produce ONE "
+        "aligned elevation surface per tile for the downstream horizon analysis. You do "
+        "NOT score obstruction risk and you do NOT search the open web — your only "
+        "artifacts are cached surfaces and their references.\n\n"
+        "For each tile:\n"
+        "1. Call cache_rw with op='check' and the tile_id first. If a surface is already "
+        "cached, reuse it and move on — the cache is content-addressed and idempotent, so "
+        "re-fetching unchanged inputs is wasted work.\n"
+        "2. Resolve each approved dataset to a concrete, download-ready COG for THIS tile: "
+        "call stac_item_read(collection, bbox) for the STAC datasets (e.g. the lidar DSM "
+        "'3dep-lidar-dsm', the DEM 'cop-dem-glo-30'/'3dep-seamless') to get a signed "
+        "asset_href. For off-catalog factors (canopy height), use the manifest's source_url "
+        "directly.\n"
+        "3. Call fetch_aligned_surface(tile_id, bbox, manifest={surface/terrain/canopy -> "
+        "href}) to read the window(s), reproject to 'auto-UTM', and build the surface. "
+        "Follow the fallback hierarchy true_dsm > pseudo_dsm (DEM + max(canopy, building)) > "
+        "cover_proxy: prefer a true lidar DSM where the manifest has one and it covers the "
+        "tile; else fuse a pseudo-DSM from DEM + canopy. (Building-height fusion is a known "
+        "deferred gap — pseudo_dsm currently fuses DEM + canopy only.)\n"
+        "4. If fetch_aligned_surface returns an error because a layer could not be read "
+        "(missing tile, download failure), step DOWN one level in the hierarchy and retry "
+        "with the next surface_mode the error suggests; the resulting surface carries a "
+        "lower confidence and a coverage_flag, which is expected — a degraded surface is "
+        "still usable and auditable, never silently dropped.\n"
+        "Report, per tile, the surface_mode used, the coverage_flag/confidence, and the "
+        "dsm_uri — not the raster contents."
+    ),
+    tools=[
+        "mcp__leo__cache_rw",
+        "mcp__leo__stac_item_read",
+        "mcp__leo__fetch_aligned_surface",
+    ],
     model="inherit",
 )
 

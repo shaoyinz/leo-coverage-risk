@@ -127,9 +127,45 @@ class Discovery:
     default_aoi_bbox: tuple[float, float, float, float] = (-125.0, 24.0, -66.5, 49.5)
 
 
+@dataclass(frozen=True)
+class Ingestion:
+    """Config for the A2 surface-ingestion agent: tiling + COG fetch/align/fuse.
+
+    A2 turns the H1-approved data manifest into one aligned surface per tile. Tiles are
+    the unit of both the windowed COG fetch and the LLM batch, which is what keeps LLM
+    cost ``O(tiles)`` while the geospatial compute stays ``O(locations)`` (architecture
+    §6). The defaults below are the knobs the ingestion stage exposes; the geometry knobs
+    (θ, σ_H, ...) live in the obstruction spec consumed by A3, not here.
+    """
+
+    # Precise-pass tile edge length, in metres of the AOI's UTM CRS. The grid is built in
+    # UTM so a tile is a real square on the ground rather than a lat/lon trapezoid.
+    tile_size_m: float = 5000.0
+    # Overlap buffer added around every tile's fetch window so an obstacle sitting just
+    # outside a tile edge (a tall tree/ridge) still enters the surface and isn't lost at
+    # the seam (architecture §5, "tile-edge object"). >= the near-field terrain radius.
+    tile_buffer_m: float = 300.0
+    # Common resample grid the COG windows are reprojected onto before fusion
+    # (architecture §3 fetch_aligned_surface default). Finer captures smaller obstacles at
+    # higher cost; see docs/rationale.md `raster_resolution_m`.
+    target_gsd_m: float = 10.0
+    # Surface fallback hierarchy, best first (docs/rationale.md `surface_source_preference`,
+    # architecture §5 download-error row). A2 walks DOWN this on a read failure: a true
+    # lidar DSM is ideal, else fuse DEM + max(canopy, building) into a pseudo-DSM, else a
+    # coarse cover proxy with lowered confidence.
+    surface_modes: tuple[str, ...] = ("true_dsm", "pseudo_dsm", "cover_proxy")
+    # Tile-keyed, content-addressed cache of aligned surfaces. Re-running a tile with
+    # unchanged inputs is a no-op (architecture §4 idempotency → resume / cost control).
+    cache_dir: Path = REPO_ROOT / "data" / "interim" / "surfaces"
+    # Sign Planetary Computer asset hrefs at download time (the unsigned hrefs A1 persists
+    # in the manifest are short-lived to sign, so signing belongs here in A2, not A1).
+    sign_assets: bool = True
+
+
 PATHS = Paths()
 MODELS = Models()
 DISCOVERY = Discovery()
+INGESTION = Ingestion()
 
 
 def require_api_key() -> str:

@@ -30,13 +30,17 @@ def build_options() -> ClaudeAgentOptions:
         agents=all_agents(),
         cwd=str(PATHS.root),
         system_prompt=(
-            "You orchestrate a LEO satellite coverage-risk pipeline. Delegate to the "
-            "subagents in order, threading state between them: (1) ingestion profiles "
-            "and de-duplicates the locations; (2) data-discovery searches STAC + the web "
-            "for the obstruction datasets covering that area and writes a ranked data "
-            "manifest — STOP and surface that manifest for human approval (the H1 gate) "
-            "on cost/licensing before any bulk download; (3) geo-analysis samples the "
-            "approved layers and scores risk; (4) qa validates the outputs. Surface "
+            "You orchestrate a LEO satellite coverage-risk pipeline. The locations are "
+            "profiled and de-duplicated to a unique-coordinate work list, then tiled, by a "
+            "deterministic pre-step (python -m leo_pipeline.ingest / leo_pipeline.tiling) — "
+            "not an agent. Delegate to the subagents in order, threading state between "
+            "them: (1) data-discovery searches STAC + the web for the obstruction datasets "
+            "covering the AOI and writes a ranked data manifest — STOP and surface that "
+            "manifest for human approval (the H1 gate) on cost/licensing before any bulk "
+            "download; (2) ingestion (A2) reads COG windows per tile, reprojects them to a "
+            "metric CRS, and fuses an aligned pseudo-DSM (or passes through a true lidar "
+            "DSM) for the approved datasets; (3) geo-analysis runs the horizon analysis on "
+            "those surfaces and scores risk; (4) qa validates the outputs. Surface "
             "anomalies for human review."
         ),
     )

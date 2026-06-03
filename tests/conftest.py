@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from leo_pipeline.config import Discovery
+from leo_pipeline.config import Discovery, Ingestion
 
 
 def run_tool(sdk_tool: Any, args: dict[str, Any]) -> tuple[dict[str, Any], Any]:
@@ -65,3 +65,44 @@ def redirect_manifest(tmp_path, monkeypatch):
     manifest_path = tmp_path / "data_manifest.json"
     monkeypatch.setattr(tools, "DISCOVERY", Discovery(manifest_path=manifest_path))
     return manifest_path
+
+
+@pytest.fixture
+def redirect_ingestion(tmp_path, monkeypatch):
+    """Point the A2 surface cache at a throwaway dir so the real cache is never touched.
+
+    Mirrors ``redirect_manifest``: ``leo_pipeline.tools`` binds ``INGESTION`` at import, so
+    swap it for a fresh ``Ingestion`` whose ``cache_dir`` lives under tmp. Returns that dir.
+    """
+    import leo_pipeline.tools as tools
+
+    cache_dir = tmp_path / "surfaces"
+    monkeypatch.setattr(tools, "INGESTION", Ingestion(cache_dir=cache_dir))
+    return cache_dir
+
+
+@pytest.fixture
+def make_read():
+    """Factory for a synthetic ``_read_window_reprojected`` result (no rasterio, no network).
+
+    Returns the same dict shape the real helper does — a small constant array on a valid
+    metric transform — so ``fetch_aligned_surface`` can be exercised end-to-end (fuse,
+    write, cache) without touching a COG. Pass ``nodata`` cells via ``holes``.
+    """
+    import numpy as np
+    from rasterio.transform import from_bounds
+
+    def _make(value: float, *, shape=(4, 4), nodata: float = -9999.0, holes=()):
+        arr = np.full(shape, float(value), dtype="float32")
+        for (r, c) in holes:
+            arr[r, c] = nodata
+        return {
+            "array": arr,
+            "transform": from_bounds(0, 0, shape[1] * 10, shape[0] * 10, shape[1], shape[0]),
+            "crs": "EPSG:32617",
+            "nodata": nodata,
+            "gsd_m": 10.0,
+            "shape": list(shape),
+        }
+
+    return _make

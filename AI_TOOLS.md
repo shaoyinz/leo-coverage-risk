@@ -96,5 +96,29 @@ as work proceeds.
   central-NC `[-80,35,-78.5,35.1]` box, 0 for an out-of-data box; the `get_aoi_bbox` tool
   returns those same counts with `source="cli_override"`.
 
+### 2026-06-03 — Surface-ingestion agent (A2): live windowed COG read + fused pseudo-DSM
+- **Used:** Claude Code (Opus 4.8) to design and build the A2 role end-to-end: an `Ingestion`
+  config block, a deterministic `tiling.py` pre-step (UTM grid over the de-duplicated work
+  list), three least-privilege tools (`stac_item_read`, `fetch_aligned_surface`, `cache_rw`)
+  doing live windowed `rasterio` reads + reproject + `DEM + max(canopy, building)` fusion into
+  a tile-keyed, content-addressed surface cache, a new `ingestion` agent + `SurfaceTile` state,
+  a standalone `leo-ingestion` CLI, and an offline + opt-in-live test suite.
+- **Accepted as-is:** the deterministic-code / LLM-only-picks-fallback split (the LLM never
+  does raster math, only chooses which surface_mode to retry on a read failure); the
+  content-addressed cache keyed on inputs with SAS tokens stripped, giving idempotent resume;
+  reusing the A1 `_summarize_stac_item` / pystac-client pattern for `stac_item_read`.
+- **Diverged / corrected:** kept the geo stack **pure rasterio** (no rioxarray/odc-stac, which
+  are absent from the shared venv) — windowed read via `src.window` + `rasterio.warp.reproject`
+  onto a grid derived deterministically from `(bbox, crs, gsd)` so two layers fuse pixel-aligned.
+  Consciously **scoped down to a "live core"**: building-footprint rasterization and a full
+  cover_proxy are documented deferred gaps (pseudo-DSM fuses DEM + canopy for now), surfaced in
+  the agent prompt, docstrings, README, and architecture doc rather than silently faked.
+- **Verified:** 75 offline tests pass (40 new: tiling, fuse/cache helpers, the tool dispatch +
+  idempotency + fallback paths, agent contract, CLI plumbing). The **live path was confirmed
+  without an API key** — a real Copernicus GLO-30 DEM window over a tiny Carolinas AOI was
+  resolved via STAC, signed, read, reprojected to UTM @10 m, and written as a GeoTIFF
+  (`LEO_RUN_LIVE=1 pytest -m live -k ingestion`). Tiling the real work list collapses 4.51M
+  unique coordinates to 5,176 UTM tiles (~872 coords/tile) — the O(tiles) batching unit.
+
 > When you accept, reject, or rework AI-generated analysis or code, add a dated entry
 > noting what and why. This is graded under "Communication & documentation."
