@@ -1,12 +1,12 @@
 """Custom tools exposed to the agents, as an in-process SDK MCP server.
 
 Live tools: ``query_locations`` and ``deduplicate_coordinates`` (DuckDB over the
-provided locations dataset), and the A1 data-discovery trio ``get_aoi_bbox`` /
+provided locations dataset); the A1 data-discovery trio ``get_aoi_bbox`` /
 ``stac_search`` / ``write_data_manifest`` (live STAC catalog search + manifest
-persistence). The obstruction/risk tools (``lookup_obstruction_layer``,
-``compute_risk_score``) are still thin stubs (real name, description, and input
-schema — the "tool definitions with schemas" deliverable) pending the per-coordinate
-sampling work; fill in their bodies in subsequent steps.
+persistence); the A2 surface-ingestion tools ``stac_item_read`` /
+``fetch_aligned_surface`` / ``cache_rw`` (windowed COG read + reproject + fuse); and
+the A3 analysis tools ``compute_sky_obstruction`` / ``find_clear_sky_spot`` (the
+per-azimuth horizon-profile obstruction scoring in ``leo_pipeline.horizon``).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from urllib.request import urlopen
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from leo_pipeline import ingest
-from leo_pipeline.config import DISCOVERY, INGESTION
+from leo_pipeline.config import ANALYSIS, DISCOVERY, INGESTION
 from leo_pipeline.state import DataManifest, DatasetCandidate
 
 # Statements the read-only query tool will accept. Anything else (INSERT, COPY,
@@ -31,16 +31,6 @@ from leo_pipeline.state import DataManifest, DatasetCandidate
 # the filesystem through the SQL surface.
 _READ_ONLY_PREFIXES = ("select", "with")
 _MAX_ROWS = 1000
-
-
-def _stub(name: str, **echo: Any) -> dict[str, Any]:
-    """Uniform placeholder response so callers can see the tool wiring works."""
-    detail = ", ".join(f"{k}={v!r}" for k, v in echo.items())
-    return {
-        "content": [
-            {"type": "text", "text": f"[stub] {name} not yet implemented. args: {detail}"}
-        ]
-    }
 
 
 def _text(payload: Any) -> dict[str, Any]:
@@ -998,31 +988,242 @@ async def cache_rw(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+# --- A3 analysis tools ----------------------------------------------------------------
+# The analysis agent reasons only about *which params to use and how to handle edges*; these
+# tools do the deterministic horizon/viewshed math (leo_pipeline.horizon) over the A2 surface
+# and never fetch data or browse the web. See docs/architecture.md (A3, §3 compute_sky_
+# obstruction / find_clear_sky_spot) and docs/rationale.md (the per-azimuth horizon profile).
+
+
+def _resolve_sky_spec(args: dict[str, Any]) -> Any:
+    """Build a horizon.SkySpec from the version-stamped ANALYSIS config, overridden by the
+    per-call ``sky_spec`` block and the top-level azimuth_step/max_radius/earth_curvature
+    args. The agent only *narrows* the spec for a call; the defaults are the approved spec."""
+    from leo_pipeline.horizon import SkySpec
+
+    s = args.get("sky_spec") or {}
+    return SkySpec(
+        min_elevation_deg=float(s.get("min_elev_deg", ANALYSIS.min_elevation_deg)),
+        az_center_deg=float(s.get("az_center_deg", ANALYSIS.pointing_azimuth_deg)),
+        az_halfwidth_deg=float(s.get("az_halfwidth_deg", ANALYSIS.cone_half_angle_deg)),
+        az_weighting=str(s.get("az_weighting", ANALYSIS.az_weighting)),
+        gso_keepout_halfwidth_deg=float(
+            s.get("gso_keepout_halfwidth_deg", ANALYSIS.gso_keepout_halfwidth_deg)
+        ),
+        band_clear_max_pct=float(s.get("band_clear_max_pct", ANALYSIS.band_clear_max_pct)),
+        band_severe_min_pct=float(s.get("band_severe_min_pct", ANALYSIS.band_severe_min_pct)),
+        azimuth_step_deg=float(args.get("azimuth_step_deg") or ANALYSIS.azimuth_step_deg),
+        max_radius_m=float(args.get("max_radius_m") or ANALYSIS.max_radius_m),
+        earth_curvature=bool(
+            args.get("earth_curvature")
+            if args.get("earth_curvature") is not None
+            else ANALYSIS.earth_curvature
+        ),
+    )
+
+
+def _surface_confidence_for(dsm_uri: str) -> str | None:
+    """Best-effort lookup of the A2 surface's own confidence from its cache sidecar, so a
+    degraded/low-confidence surface flows through to a lower analysis confidence."""
+    try:
+        base = dsm_uri[: -len("_dsm.tif")] if dsm_uri.endswith("_dsm.tif") else dsm_uri
+        sidecar = Path(base + ".json")
+        if sidecar.exists():
+            return json.loads(sidecar.read_text()).get("confidence")
+    except Exception:
+        pass
+    return None
+
+
 @tool(
-    "lookup_obstruction_layer",
-    "Sample an environmental obstruction layer (canopy height, terrain/DEM slope, or "
-    "building footprints) at a coordinate and return the value plus source metadata.",
-    {"lat": float, "lon": float, "layer": str},
+    "compute_sky_obstruction",
+    "Score sky obstruction for a batch of locations against ONE aligned surface (the A2 "
+    "DSM for their tile). For each point it builds the per-azimuth horizon profile, compares "
+    "it to the required sky region (elevations above the dish's minimum reception angle over "
+    "its azimuth cone), and returns the dwell-time-weighted obstruction percentage the "
+    "Starlink app would report, plus a clear/at_risk/severe tier (or 'undetermined' when no "
+    "surface sits under the point). Deterministic geospatial math — you do NOT fetch data "
+    "here. `points` is a list of {location_id, lat, lon} (EPSG:4326); `dsm_uri` is the cached "
+    "surface from A2; `dish_height_m` is the mount height above the surface (default 2); "
+    "`sky_spec` overrides the approved spec (min_elev_deg, az_center_deg, az_halfwidth_deg, "
+    "az_weighting in uniform|north_biased); `azimuth_step_deg`/`max_radius_m`/`earth_curvature` "
+    "tune the profile. Returns array<{location_id, obstruction_pct, blocked_azimuths, "
+    "horizon_profile, risk_tier, confidence}>.",
+    {
+        "points": list,
+        "dsm_uri": str,
+        "dish_height_m": float,
+        "sky_spec": dict,
+        "azimuth_step_deg": float,
+        "max_radius_m": float,
+        "earth_curvature": bool,
+    },
 )
-async def lookup_obstruction_layer(args: dict[str, Any]) -> dict[str, Any]:
-    # TODO: sample raster/vector layer (rasterio/geopandas) for the requested layer.
-    return _stub(
-        "lookup_obstruction_layer",
-        lat=args.get("lat"),
-        lon=args.get("lon"),
-        layer=args.get("layer"),
+async def compute_sky_obstruction(args: dict[str, Any]) -> dict[str, Any]:
+    points = args.get("points")
+    dsm_uri = (args.get("dsm_uri") or "").strip()
+    dish_height_m = args.get("dish_height_m")
+    dish_height_m = 2.0 if dish_height_m is None else float(dish_height_m)
+
+    if not isinstance(points, list) or not points:
+        return _error("points must be a non-empty list of {location_id, lat, lon}")
+    if not dsm_uri:
+        return _error("dsm_uri is required (the A2 surface for these points' tile)")
+    if not Path(dsm_uri).exists():
+        return _error(f"dsm_uri not found: {dsm_uri} — has A2 built this tile's surface?")
+
+    from leo_pipeline import horizon
+
+    spec = _resolve_sky_spec(args)
+    surface_conf = _surface_confidence_for(dsm_uri)
+    try:
+        sampler = horizon._cached_sampler(dsm_uri)
+    except Exception as exc:
+        return _error(f"could not open surface {dsm_uri}: {exc}")
+
+    results: list[dict[str, Any]] = []
+    for p in points:
+        if not isinstance(p, dict) or p.get("lat") is None or p.get("lon") is None:
+            return _error(f"each point needs lat+lon: {p!r}")
+        try:
+            score = horizon.score_point(
+                sampler, float(p["lon"]), float(p["lat"]), dish_height_m, spec
+            )
+        except Exception as exc:
+            return _error(f"scoring failed for {p.get('location_id')!r}: {exc}")
+        conf = horizon.confidence_flag(
+            surface_conf, score.get("sampled_fraction", 0.0), score.get("obstruction_pct") or 0.0, spec
+        )
+        results.append(
+            {
+                "location_id": p.get("location_id"),
+                "obstruction_pct": score["obstruction_pct"],
+                "blocked_azimuths": score["blocked_azimuths"],
+                "horizon_profile": score["horizon_profile"],
+                "risk_tier": score["risk_tier"],
+                "confidence": conf,
+                "dish_height_m": score["dish_height_m"],
+            }
+        )
+
+    tiers: dict[str, int] = {}
+    for r in results:
+        tiers[r["risk_tier"]] = tiers.get(r["risk_tier"], 0) + 1
+    return _text(
+        {
+            "dsm_uri": dsm_uri,
+            "spec_version": ANALYSIS.spec_version,
+            "n_points": len(results),
+            "tier_counts": tiers,
+            "results": results,
+        }
     )
 
 
 @tool(
-    "compute_risk_score",
-    "Combine sampled obstruction factors into a 0..1 risk score and a low/medium/high "
-    "band, applying the methodology documented in docs/rationale.md.",
-    {"factors": dict},
+    "find_clear_sky_spot",
+    "Scenario 3 helper: within an X-metre buffer of a flagged location, search a grid of "
+    "candidate positions and mount heights for ones with lower sky obstruction — i.e. 'move "
+    "the dish here' or 'raise it to Y m'. Reuses the same horizon engine as "
+    "compute_sky_obstruction. Candidates are clipped to the buffer (a parcel-clip proxy — "
+    "cross-parcel suggestions are out of scope). `lat`/`lon` is the location (EPSG:4326); "
+    "`dsm_uri` is the A2 surface; `buffer_m` is the search radius (default 50); `sky_spec` "
+    "overrides the approved spec; `candidate_grid_m` is the grid spacing (default 5); "
+    "`dish_height_candidates_m` are the mount heights to try (default [2,4,8]). Returns the "
+    "current-position baseline plus array<{lat, lon, dish_height_m, obstruction_pct, "
+    "improvement_pct}> sorted best-first.",
+    {
+        "lat": float,
+        "lon": float,
+        "buffer_m": float,
+        "dsm_uri": str,
+        "sky_spec": dict,
+        "candidate_grid_m": float,
+        "dish_height_candidates_m": list,
+    },
 )
-async def compute_risk_score(args: dict[str, Any]) -> dict[str, Any]:
-    # TODO: weighted model translating install-guide thresholds into a score.
-    return _stub("compute_risk_score", factors=args.get("factors"))
+async def find_clear_sky_spot(args: dict[str, Any]) -> dict[str, Any]:
+    lat = args.get("lat")
+    lon = args.get("lon")
+    dsm_uri = (args.get("dsm_uri") or "").strip()
+    buffer_m = float(args.get("buffer_m") or 50.0)
+    grid_m = max(1.0, float(args.get("candidate_grid_m") or 5.0))
+    heights = args.get("dish_height_candidates_m") or [2.0, 4.0, 8.0]
+
+    if lat is None or lon is None:
+        return _error("lat and lon are required")
+    if not dsm_uri:
+        return _error("dsm_uri is required (the A2 surface for this location's tile)")
+    if not Path(dsm_uri).exists():
+        return _error(f"dsm_uri not found: {dsm_uri} — has A2 built this tile's surface?")
+    try:
+        heights = [float(h) for h in heights]
+    except (TypeError, ValueError):
+        return _error("dish_height_candidates_m must be a list of numbers")
+
+    import numpy as np
+
+    from leo_pipeline import horizon
+
+    spec = _resolve_sky_spec(args)
+    surface_conf = _surface_confidence_for(dsm_uri)
+    try:
+        sampler = horizon._cached_sampler(dsm_uri)
+    except Exception as exc:
+        return _error(f"could not open surface {dsm_uri}: {exc}")
+
+    x0, y0 = sampler.lonlat_to_xy(float(lon), float(lat))
+    # Baseline = current position at the lowest candidate mount height.
+    base_h = min(heights)
+    base = horizon.score_xy(sampler, x0, y0, base_h, spec)
+    base_pct = base["obstruction_pct"]
+
+    # Grid of offsets within the buffer circle (metric), including the centre (offset 0).
+    steps = np.arange(-buffer_m, buffer_m + grid_m, grid_m)
+    candidates: list[dict[str, Any]] = []
+    for dx in steps:
+        for dy in steps:
+            if dx * dx + dy * dy > buffer_m * buffer_m:
+                continue
+            for h in heights:
+                score = horizon.score_xy(sampler, x0 + float(dx), y0 + float(dy), h, spec)
+                pct = score["obstruction_pct"]
+                if pct is None:  # undetermined candidate (off-surface) — skip
+                    continue
+                clon, clat = sampler.xy_to_lonlat(x0 + float(dx), y0 + float(dy))
+                improvement = (
+                    round(base_pct - pct, 2) if base_pct is not None else None
+                )
+                candidates.append(
+                    {
+                        "lat": round(clat, 7),
+                        "lon": round(clon, 7),
+                        "dish_height_m": h,
+                        "obstruction_pct": pct,
+                        "improvement_pct": improvement,
+                        "risk_tier": score["risk_tier"],
+                        "confidence": horizon.confidence_flag(
+                            surface_conf, score.get("sampled_fraction", 0.0), pct, spec
+                        ),
+                    }
+                )
+
+    candidates.sort(key=lambda c: (c["obstruction_pct"], c["dish_height_m"]))
+    return _text(
+        {
+            "dsm_uri": dsm_uri,
+            "spec_version": ANALYSIS.spec_version,
+            "baseline": {
+                "lat": round(float(lat), 7),
+                "lon": round(float(lon), 7),
+                "dish_height_m": base_h,
+                "obstruction_pct": base_pct,
+                "risk_tier": base["risk_tier"],
+            },
+            "n_candidates": len(candidates),
+            "candidates": candidates[:10],
+        }
+    )
 
 
 # In-process MCP server bundling the tools above. Reference its name in
@@ -1040,8 +1241,8 @@ LEO_TOOLS_SERVER = create_sdk_mcp_server(
         fetch_aligned_surface,
         stac_item_read,
         cache_rw,
-        lookup_obstruction_layer,
-        compute_risk_score,
+        compute_sky_obstruction,
+        find_clear_sky_spot,
     ],
 )
 
@@ -1056,6 +1257,6 @@ TOOL_NAMES = [
     "mcp__leo__fetch_aligned_surface",
     "mcp__leo__stac_item_read",
     "mcp__leo__cache_rw",
-    "mcp__leo__lookup_obstruction_layer",
-    "mcp__leo__compute_risk_score",
+    "mcp__leo__compute_sky_obstruction",
+    "mcp__leo__find_clear_sky_spot",
 ]

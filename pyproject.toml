@@ -49,6 +49,7 @@ dev = [
 leo-discovery = "leo_pipeline.run_discovery:main"   # A1: data manifest
 leo-tiling = "leo_pipeline.tiling:main"             # tile the de-duplicated work list
 leo-ingestion = "leo_pipeline.run_ingestion:main"   # A2: aligned per-tile surfaces
+leo-analysis = "leo_pipeline.run_analysis:main"     # A3: per-location obstruction scores
 
 [tool.setuptools.packages.find]
 where = ["src"]

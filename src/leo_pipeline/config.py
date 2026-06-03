@@ -162,10 +162,76 @@ class Ingestion:
     sign_assets: bool = True
 
 
+@dataclass(frozen=True)
+class Analysis:
+    """The obstruction SPEC for the A3 analysis agent — a pre-approved, version-stamped
+    config, NOT generated at runtime (architecture.md §2, the ``SPEC`` node).
+
+    The domain research is already complete (docs/rationale.md), so the reception geometry
+    (θ_min, the azimuth-weighting gradient) and the risk-tier cut-points enter the run as a
+    frozen config tied to one ``spec_version`` — which is what lets every score trace back to
+    a single spec and drops a runtime agent + a human gate. Every knob here is a documented
+    entry in the rationale's "Tuneable parameters" registry; the defaults match that doc.
+    """
+
+    # Version stamp recorded on every finding so a score is reproducible and drift-detectable
+    # (architecture.md §4 versioning). Bump when any geometry/threshold default below changes.
+    spec_version: str = "spec-2026.06-theta25"
+
+    # --- Reception geometry (physical / regulatory; rationale "Starlink reception geometry") ---
+    # Minimum reception (elevation) angle θ above the horizon. 25° is the conservative,
+    # app-documented default; re-scorable to 10–20° per the Apr-2026 FCC rules (a lower θ
+    # widens the cone AND grows the search radius d_max ∝ 1/tanθ — a knob, not a free win).
+    min_elevation_deg: float = 25.0
+    # Half-angle of the dish's required sky cone from boresight (Gen3 standard 110° full cone).
+    # The required sky region is the azimuth arc within this half-width of the pointing bearing.
+    cone_half_angle_deg: float = 55.0
+    # Boresight bearing the azimuth weighting is centred on (degrees from north, clockwise).
+    # North-ish in CONUS; per-site the Starlink app reports the optimum, so it's a parameter.
+    pointing_azimuth_deg: float = 0.0
+    # Azimuth weighting profile: 'uniform' (omni, conservative), 'north_biased' (static
+    # gradient heaviest toward the pointing bearing, lightest in the southern GSO keep-out
+    # band), or 'tle_derived' (v2 dwell-time map — not yet implemented).
+    az_weighting: str = "north_biased"
+    # Half-width of the GSO-arc keep-out band in the southern sky where weighting is suppressed.
+    gso_keepout_halfwidth_deg: float = 18.0
+
+    # --- Install / siting ---
+    # Dish mount heights above the surface to sweep (metres). Roof-only (0) is the default; the
+    # sweep lets A3 report "clear if raised to X m" instead of hard-coding one pole height.
+    mount_heights_m: tuple[float, ...] = (0.0, 1.5, 3.0)
+
+    # --- Risk banding (rationale "Risk banding & uncertainty") ---
+    # obstruction_pct (dwell-weighted % of usable sky removed) cut-points for the tiers:
+    # ≤ clear_max → 'clear' 🟢; < severe_min → 'at_risk' 🟡; ≥ severe_min → 'severe' 🔴.
+    # MUST be calibrated against the Starlink app on a labelled sample (open question).
+    band_clear_max_pct: float = 1.0
+    band_severe_min_pct: float = 10.0
+    # Vertical-uncertainty budget (metres). In this first live build σ_H is folded into the
+    # confidence flag (a borderline pct near a cut-point is reported lower-confidence) rather
+    # than a full probabilistic clearance-margin model — the latter is a documented next step.
+    sigma_h_m: float = 3.0
+
+    # --- Search & computation ---
+    # Angular resolution of the horizon profile (degrees). Finer = more accurate, more compute.
+    azimuth_step_deg: float = 2.0
+    # Outer query bound (metres) for the per-azimuth ray march. A safety clamp on cost; the
+    # exact per-feature cutoff d_max = (H_b − H_a)/tanθ still governs whether a sample blocks,
+    # so this only ever *tightens* the physically-derived radius (rationale per-class table).
+    max_radius_m: float = 1500.0
+    # Earth-curvature + refraction correction. Off near-field (sub-cm drop at few-hundred-m
+    # obstacle scale); engage only for the km-scale terrain horizon pass.
+    earth_curvature: bool = False
+
+    # Where run_analysis persists per-location obstruction findings.
+    findings_dir: Path = REPO_ROOT / "data" / "interim" / "analysis"
+
+
 PATHS = Paths()
 MODELS = Models()
 DISCOVERY = Discovery()
 INGESTION = Ingestion()
+ANALYSIS = Analysis()
 
 
 def require_api_key() -> str:

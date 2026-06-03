@@ -120,20 +120,51 @@ DATA_DISCOVERY_AGENT = AgentDefinition(
     model="inherit",
 )
 
-# --- Geospatial analysis agent --------------------------------------------------------
-# Scope: for clean locations, sample obstruction layers and compute risk scores.
+# --- Geospatial analysis agent (A3) ---------------------------------------------------
+# Scope: turn each tile's aligned A2 surface into a per-location sky-obstruction score and a
+# risk tier. The LLM only chooses parameters (mount-height sweep, when to relax θ) and handles
+# edges (undetermined points, "find a clearer spot"); the per-azimuth horizon math is
+# deterministic (leo_pipeline.horizon). Reads only the surface it is given — never fetches
+# data, never browses the web, never scores from raw coordinates without a surface.
 GEO_ANALYSIS_AGENT = AgentDefinition(
-    description="Samples obstruction layers per location and computes connectivity risk scores.",
+    description=(
+        "Scores per-location sky obstruction from an aligned surface via the horizon profile "
+        "and classifies a clear/at_risk/severe risk tier."
+    ),
     prompt=(
-        "You are the geospatial-analysis agent. For each clean location, sample the relevant "
-        "obstruction layers (canopy, terrain, structures) with lookup_obstruction_layer, then "
-        "call compute_risk_score to produce a 0..1 score and a low/medium/high band. Follow the "
-        "methodology in docs/rationale.md. Flag locations the public data cannot model."
+        "You are the geospatial-analysis agent (A3 in docs/architecture.md). Given ONE aligned "
+        "surface per tile (the A2 dsm_uri) and the locations on that tile, compute how much of "
+        "the sky a Starlink dish needs is obstructed, and classify each location's risk tier. "
+        "The geometry is deterministic and lives in the tools — your job is to call them with "
+        "good parameters and to reason about edges, NOT to do math yourself. You do NOT fetch "
+        "data, resolve COGs, or browse the web; you only read the surface you are handed.\n\n"
+        "Methodology (docs/rationale.md): a location is at risk when nearby terrain, canopy, or "
+        "buildings rise above the dish's minimum reception line over the azimuth cone it must "
+        "see. This is a per-azimuth horizon profile compared to the required sky region, "
+        "weighted by satellite dwell time (north-biased in CONUS, de-weighted in the southern "
+        "GSO keep-out band) — never a simple radial buffer.\n\n"
+        "For each tile:\n"
+        "1. Call compute_sky_obstruction(points=[{location_id, lat, lon}...], dsm_uri) for the "
+        "tile's locations in ONE batch — it returns obstruction_pct, blocked_azimuths, the "
+        "risk_tier (clear | at_risk | severe), and a confidence per point. Batch per tile so "
+        "the cost stays O(tiles), not O(locations).\n"
+        "2. The dish mount height above the roof is the single biggest unknown. Score at the "
+        "roof-only default first; for any at_risk/severe location, re-score with a higher "
+        "dish_height_m (e.g. 1.5 m then 3 m) so you can report 'clear if raised to X m' rather "
+        "than a flat fail.\n"
+        "3. A 'undetermined' tier means no surface sat under the point (no datum to mount on) — "
+        "do NOT guess a score; report it undetermined with the reason. Low confidence flows "
+        "from a degraded/partial A2 surface and is expected — surface it, don't hide it.\n"
+        "4. When asked to recommend a fix for a flagged location ('find a clearer spot within "
+        "X m', 'how high to mount'), call find_clear_sky_spot(lat, lon, dsm_uri, buffer_m, "
+        "dish_height_candidates_m); candidates are clipped to the buffer (a parcel-clip proxy). "
+        "Report the best lower-obstruction position/height and its improvement.\n"
+        "Report, per location, the obstruction_pct, risk_tier, and confidence — and the "
+        "spec_version every score was computed under — not raw rasters."
     ),
     tools=[
-        "mcp__leo__query_locations",
-        "mcp__leo__lookup_obstruction_layer",
-        "mcp__leo__compute_risk_score",
+        "mcp__leo__compute_sky_obstruction",
+        "mcp__leo__find_clear_sky_spot",
     ],
     model="inherit",
 )

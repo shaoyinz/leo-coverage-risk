@@ -97,6 +97,27 @@ class SurfaceTile:
 
 
 @dataclass
+class ObstructionResult:
+    """A3 output: one location's sky-obstruction score against an aligned surface.
+
+    Carries the dwell-time-weighted ``obstruction_pct``, the three-state ``risk_tier``
+    (``clear`` | ``at_risk`` | ``severe`` | ``undetermined``), and a ``confidence`` flag so a
+    degraded or borderline result stays usable and auditable rather than silently wrong
+    (architecture.md §5). ``spec_version`` stamps which approved obstruction spec produced the
+    score, so it is reproducible and drift-detectable (architecture.md §4)."""
+
+    location_id: str
+    obstruction_pct: float | None  # dwell-weighted % of usable sky removed (None = undetermined)
+    risk_tier: str  # "clear" | "at_risk" | "severe" | "undetermined"
+    confidence: str  # "high" | "medium" | "low"
+    dish_height_m: float = 0.0  # mount height above the surface this score assumed
+    blocked_azimuths: list[float] = field(default_factory=list)
+    tile_id: str | None = None
+    dsm_uri: str | None = None  # the A2 surface scored against (a reference, not pixels)
+    spec_version: str = ""  # the obstruction spec version the score was computed under
+
+
+@dataclass
 class PipelineState:
     """Mutable state threaded through the agent graph."""
 
@@ -108,6 +129,8 @@ class PipelineState:
     manifest: DataManifest | None = None
     # Aligned per-tile surfaces from the ingestion agent (A2; empty until A2 runs).
     surfaces: list[SurfaceTile] = field(default_factory=list)
+    # Per-location obstruction scores from the analysis agent (A3; empty until A3 runs).
+    obstruction: list[ObstructionResult] = field(default_factory=list)
     findings: list[RiskFinding] = field(default_factory=list)
     # Free-form notes/log entries each agent can append for the decision log.
     notes: list[str] = field(default_factory=list)

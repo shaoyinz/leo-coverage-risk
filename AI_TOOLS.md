@@ -120,5 +120,33 @@ as work proceeds.
   (`LEO_RUN_LIVE=1 pytest -m live -k ingestion`). Tiling the real work list collapses 4.51M
   unique coordinates to 5,176 UTM tiles (~872 coords/tile) — the O(tiles) batching unit.
 
+### 2026-06-03 — Analysis agent (A3): live per-azimuth horizon profile + obstruction scoring
+- **Used:** Claude Code (Opus 4.8) to design and build the A3 role end-to-end: a deterministic
+  `horizon.py` engine (bilinear `SurfaceSampler`, ray-marched per-azimuth horizon profile,
+  dwell-time-weighted blocked-sky fraction, three-state tiering + confidence), the two
+  architecture A3 tools (`compute_sky_obstruction`, `find_clear_sky_spot`), a version-stamped
+  `Analysis` obstruction spec, an `ObstructionResult` state record, a rewritten `geo-analysis`
+  agent, a standalone `leo-analysis` CLI (with a no-API `--compute` path), and an offline test
+  suite over real synthetic GeoTIFF surfaces.
+- **Accepted as-is:** the LLM-picks-params / code-computes split (the agent only chooses the
+  mount-height sweep and edge handling; all horizon math is deterministic numpy); the
+  per-azimuth horizon profile over a radial buffer (per `docs/rationale.md`); the directional
+  cone + north-biased dwell weighting with a southern GSO keep-out de-weight.
+- **Diverged / corrected:** **replaced** the placeholder `lookup_obstruction_layer` /
+  `compute_risk_score` stubs with the architecture's real A3 tools rather than filling the
+  stubs, since their schemas did not match the documented A3 contract. Tightened the σ_H
+  "near-cut" confidence band so an unambiguous 0%-obstruction location is not penalised.
+  Consciously scoped to a "live core": **σ_H is folded into the confidence flag** rather than a
+  full probabilistic clearance-margin model, and `az_weighting='tle_derived'` falls back to the
+  static north-biased gradient — both documented as deferred in the prompt, docstrings, README,
+  and architecture doc rather than silently faked.
+- **Verified:** 25 new offline tests (real-GeoTIFF surfaces: flat → clear, northern wall →
+  severe while the same wall to the south stays clear under the directional cone, masting the
+  dish lowers obstruction, off-surface → undetermined; single-obstacle horizon angle ≈
+  `arctan(Δh/d)`; agent contract + CLI plumbing). Full suite 100 passed / 2 skipped (opt-in
+  live). The `leo-analysis --compute` path runs the same engine offline end-to-end. **Not yet
+  agentically verified** — no live A3 agent run has been driven; only the deterministic engine
+  and tool wiring are exercised.
+
 > When you accept, reject, or rework AI-generated analysis or code, add a dated entry
 > noting what and why. This is graded under "Communication & documentation."
