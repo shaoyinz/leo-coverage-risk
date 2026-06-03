@@ -40,8 +40,14 @@ on Microsoft Planetary Computer (`pc`) or an off-catalog web source.
   we synthesise a pseudo-DSM `= DEM + max(canopy height, building height)`. That is why we
   source the three component layers (terrain, canopy, buildings) in addition to the DSM.
 - **Canopy is off-catalog and that's expected.** No Planetary Computer collection carries
-  tree-canopy **height** (verified: 134 collections, none canopy-height), so the agent must
-  source it from the open web — the reason A1 holds `WebSearch`/`WebFetch`. We deliberately
+  tree-canopy **height** (verified: 134 collections, none canopy-height), and Meta's
+  dataset publishes **no STAC endpoint** either — so the agent sources it via
+  [`opendata_registry_search`](../src/leo_pipeline/tools/__init__.py), a deterministic probe
+  over a curated AWS Open Data Registry snapshot ([`config.DISCOVERY.web_sources`](../src/leo_pipeline/config.py))
+  that returns a grounded, live-verified record (name, S3 URI, licence, resolution) instead
+  of depending on a general `WebSearch` that is noisy, US-only, and can be disabled at the
+  org level. `WebSearch`/`WebFetch` remain only as a constrained last-resort gap-filler. We
+  deliberately
   list canopy *height*, not *cover*: 100 % cover by 3 m shrubs and by 30 m conifers give the
   same cover but wildly different horizons. Canopy **cover** layers (NLCD TCC / `esa-worldcover`)
   are kept only as a coarse cross-check / proxy, never as a height substitute.

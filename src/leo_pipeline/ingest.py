@@ -149,6 +149,34 @@ def aoi_bbox(con: duckdb.DuckDBPyConnection) -> dict:
     }
 
 
+def count_in_bbox(con: duckdb.DuckDBPyConnection, bbox: list[float]) -> dict:
+    """Count usable locations falling inside an externally-supplied AOI bbox.
+
+    ``bbox`` is ``[min_lon, min_lat, max_lon, max_lat]`` in EPSG:4326 (the order the
+    discovery CLI's ``--bbox`` uses). Applies the same clean-subset filter as
+    ``aoi_bbox`` / ``profile_locations`` (null and out-of-range coordinates excluded)
+    and counts only points within the box, so a user-supplied AOI reports the real
+    number of locations it contains instead of assuming zero. Returns the total and
+    distinct-coordinate counts.
+    """
+    min_lon, min_lat, max_lon, max_lat = bbox
+    n_total, n_distinct = con.execute(
+        """
+        SELECT
+            count(*),
+            count(DISTINCT (latitude, longitude))
+        FROM locations
+        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+          AND latitude  BETWEEN -90  AND 90
+          AND longitude BETWEEN -180 AND 180
+          AND longitude BETWEEN ? AND ?
+          AND latitude  BETWEEN ? AND ?
+        """,
+        [min_lon, max_lon, min_lat, max_lat],
+    ).fetchone()
+    return {"n_total": n_total, "n_distinct": n_distinct}
+
+
 def deduplicate_coordinates(
     con: duckdb.DuckDBPyConnection,
     *,

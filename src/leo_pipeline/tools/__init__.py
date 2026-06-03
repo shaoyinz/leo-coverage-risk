@@ -15,6 +15,7 @@ import dataclasses
 import json
 from datetime import datetime, timezone
 from typing import Any
+from urllib.request import urlopen
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
@@ -117,15 +118,46 @@ async def deduplicate_coordinates(args: dict[str, Any]) -> dict[str, Any]:
 # The discovery agent reasons and ranks; these tools do the deterministic catalog work
 # and write only the manifest (no rasters). See docs/architecture.md (A1).
 
+# Optional process-level AOI override (lon/lat bbox [min_lon,min_lat,max_lon,max_lat]).
+# The run_discovery CLI sets this so a user can target their own area without a locations
+# CSV; None means "derive the AOI normally (CSV, else CONUS fallback)".
+AOI_OVERRIDE: list[float] | None = None
+
 
 @tool(
     "get_aoi_bbox",
     "Compute the area-of-interest bounding box (lon/lat) and point counts for the "
     "provided locations dataset, to use as the AOI of a data search. Read-only and takes "
-    "no arguments. Falls back to a CONUS bbox if the locations CSV is absent.",
+    "no arguments. Honours a process-level AOI override (set by the run_discovery CLI's "
+    "--bbox) if present, else derives the AOI from the locations CSV, else falls back to "
+    "a CONUS bbox.",
     {},
 )
 async def get_aoi_bbox(args: dict[str, Any]) -> dict[str, Any]:
+    if AOI_OVERRIDE is not None:
+        # An override bbox targets a specific area, but if the locations CSV is present
+        # we still report how many of its points actually fall inside that box — an
+        # override is a spatial filter, not "no data". Hardcoding 0 here made the agent
+        # write a misleading "CSV had 0 points" note even when the box was full of points.
+        counts = {"n_total": 0, "n_distinct": 0}
+        try:
+            con = ingest.connect()
+        except FileNotFoundError:
+            pass
+        else:
+            try:
+                counts = ingest.count_in_bbox(con, list(AOI_OVERRIDE))
+            finally:
+                con.close()
+        return _text(
+            {
+                "bbox": list(AOI_OVERRIDE),
+                "crs": "EPSG:4326",
+                "n_total": counts["n_total"],
+                "n_distinct": counts["n_distinct"],
+                "source": "cli_override",
+            }
+        )
     try:
         con = ingest.connect()
     except FileNotFoundError:
@@ -247,6 +279,115 @@ async def stac_search(args: dict[str, Any]) -> dict[str, Any]:
     return _text({"catalog": catalog_url, "bbox": bbox, "collections": results})
 
 
+# Raw YAML for one dataset in the AWS Open Data Registry (awslabs/open-data-registry).
+_REGISTRY_RAW_URL = (
+    "https://raw.githubusercontent.com/awslabs/open-data-registry/main/datasets/{id}.yaml"
+)
+
+
+def _fetch_registry_record(registry_id: str, timeout: float = 8.0) -> dict[str, Any] | None:
+    """Best-effort live fetch of one AWS Open Data Registry record, to *verify* a curated
+    candidate resolves and to refresh its licence/owner from source. Returns the parsed
+    Name/License/ManagedBy (+ ``resolved=True``) or ``None`` on any failure (offline, 404,
+    no YAML parser) — callers fall back to the curated snapshot. Isolated as a module-level
+    helper so tests can monkeypatch it without touching the network.
+    """
+    try:
+        url = _REGISTRY_RAW_URL.format(id=registry_id)
+        with urlopen(url, timeout=timeout) as resp:  # noqa: S310 (fixed https host)
+            raw = resp.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    try:
+        import yaml  # optional dependency; absent -> treat as unverified
+
+        doc = yaml.safe_load(raw) or {}
+    except Exception:
+        return None
+    return {
+        "name": doc.get("Name"),
+        "license": doc.get("License"),
+        "managed_by": doc.get("ManagedBy"),
+        "resolved": True,
+    }
+
+
+@tool(
+    "opendata_registry_search",
+    "Search the curated AWS Open Data Registry snapshot for off-catalog obstruction "
+    "datasets (e.g. tree-canopy HEIGHT, which no STAC catalog hosts) by keyword, and "
+    "verify each hit against the live registry. This is the RELIABLE path for canopy and "
+    "other non-STAC layers: it returns a grounded record (name, S3 URI, licence, vintage, "
+    "resolution) deterministically, instead of depending on a general WebSearch that may "
+    "be disabled or rank the real dataset poorly. `keywords` is a list of terms (e.g. "
+    "['canopy','height']); `factor` optionally restricts to one obstruction factor "
+    "('canopy'|'buildings'|...); `max_results` caps the hits (default 5). Use the returned "
+    "`s3_uri`/`registry_url` as the manifest entry's source_url.",
+    {"keywords": list, "factor": str, "max_results": int},
+)
+async def opendata_registry_search(args: dict[str, Any]) -> dict[str, Any]:
+    keywords = [str(k).lower() for k in (args.get("keywords") or []) if str(k).strip()]
+    factor_filter = (args.get("factor") or "").strip().lower() or None
+    max_results = max(1, min(int(args.get("max_results") or 5), 25))
+
+    # Flatten the curated catalog to (factor, entry) pairs, honouring an optional filter.
+    catalog = DISCOVERY.web_sources or {}
+    pool: list[tuple[str, dict[str, Any]]] = [
+        (factor, entry)
+        for factor, entries in catalog.items()
+        if factor_filter is None or factor == factor_filter
+        for entry in entries
+    ]
+    if not pool:
+        return _text({"keywords": keywords, "n_results": 0, "results": []})
+
+    def _score(factor: str, entry: dict[str, Any]) -> int:
+        if not keywords:
+            return 1  # no keywords -> return the whole (optionally filtered) pool
+        haystack = " ".join(
+            str(x).lower()
+            for x in (
+                factor,
+                entry.get("name", ""),
+                entry.get("description", ""),
+                *entry.get("keywords", []),
+            )
+        )
+        return sum(1 for k in keywords if k in haystack)
+
+    ranked = sorted(
+        ((_score(f, e), f, e) for f, e in pool), key=lambda t: t[0], reverse=True
+    )
+    hits = [(f, e) for score, f, e in ranked if score > 0][:max_results]
+
+    results: list[dict[str, Any]] = []
+    for factor, entry in hits:
+        record = {
+            "factor": factor,
+            "name": entry.get("name"),
+            "registry_id": entry.get("registry_id"),
+            "registry_url": entry.get("registry_url"),
+            "s3_uri": entry.get("s3_uri"),
+            "gsd_m": entry.get("gsd_m"),
+            "vintage": entry.get("vintage"),
+            "license": entry.get("license"),
+            "description": entry.get("description"),
+            "verified": False,
+            "managed_by": None,
+        }
+        rid = entry.get("registry_id")
+        if rid:
+            live = _fetch_registry_record(rid)
+            if live and live.get("resolved"):
+                record["verified"] = True
+                record["managed_by"] = live.get("managed_by")
+                if live.get("license"):  # prefer the source-of-truth licence string
+                    record["license"] = live["license"]
+        results.append(record)
+
+    return _text({"keywords": keywords, "n_results": len(results), "results": results})
+
+
 @tool(
     "write_data_manifest",
     "Persist the ranked data manifest (the A1 deliverable) to "
@@ -277,11 +418,27 @@ async def write_data_manifest(args: dict[str, Any]) -> dict[str, Any]:
             return _error(f"entry missing required keys {sorted(missing)}: {e}")
         candidates.append(DatasetCandidate(**{k: v for k, v in e.items() if k in valid}))
 
+    # Grounding gate: an access=='web' pick must carry a resolvable source (source_url or
+    # asset_href). This stops an ungrounded model recall ("I think Meta has a canopy layer")
+    # from passing as a selected dataset — it is de-selected and the gap is surfaced to the
+    # H1 reviewer rather than silently trusted. STAC picks are grounded by stac_search.
+    grounding_notes: list[str] = []
+    for c in candidates:
+        if c.access == "web" and c.selected and not (c.source_url or c.asset_href):
+            c.selected = False
+            grounding_notes.append(
+                f"de-selected ungrounded web pick {c.dataset_id!r} ({c.factor}): "
+                "no source_url/asset_href — re-source via opendata_registry_search"
+            )
+
+    notes_list = notes if isinstance(notes, list) else [str(notes)]
+    notes_list = list(notes_list) + grounding_notes
+
     manifest = DataManifest(
         aoi_bbox=list(bbox) if isinstance(bbox, (list, tuple)) else [],
         generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         entries=candidates,
-        notes=notes if isinstance(notes, list) else [str(notes)],
+        notes=notes_list,
     )
     path = DISCOVERY.manifest_path
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -338,6 +495,7 @@ LEO_TOOLS_SERVER = create_sdk_mcp_server(
         deduplicate_coordinates,
         get_aoi_bbox,
         stac_search,
+        opendata_registry_search,
         write_data_manifest,
         lookup_obstruction_layer,
         compute_risk_score,
@@ -350,6 +508,7 @@ TOOL_NAMES = [
     "mcp__leo__deduplicate_coordinates",
     "mcp__leo__get_aoi_bbox",
     "mcp__leo__stac_search",
+    "mcp__leo__opendata_registry_search",
     "mcp__leo__write_data_manifest",
     "mcp__leo__lookup_obstruction_layer",
     "mcp__leo__compute_risk_score",

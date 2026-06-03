@@ -11,8 +11,10 @@ Submission for the Ready Builders Challenge
 
 Methodology, Starlink reception geometry, and tuneable parameters documented
 (`docs/rationale.md`); ingestion/de-duplication and the **data-discovery agent** (live
-STAC search → ranked data manifest) are live; obstruction & risk tools are schema-defined
-stubs pending the per-coordinate sampling work. See the [decision log](#decision-log).
+STAC search → ranked data manifest) are live, with a standalone `leo-discovery` CLI and a
+deterministic `tests/` suite (offline; one opt-in live test); obstruction & risk tools are
+schema-defined stubs pending the per-coordinate sampling work. See the
+[decision log](#decision-log).
 
 ## Layout
 
@@ -52,6 +54,25 @@ The `ANTHROPIC_API_KEY` (challenge testing budget) goes in `.env`, never committ
 ../../.venv/bin/python -m leo_pipeline.orchestrator --run  # drive agents (needs ANTHROPIC_API_KEY)
 ```
 
+Run the **A1 data-discovery agent on its own** to produce a ranked manifest, with an
+optional custom AOI (no locations CSV required):
+
+```bash
+../../.venv/bin/python -m leo_pipeline.run_discovery                        # AOI from the locations CSV
+../../.venv/bin/python -m leo_pipeline.run_discovery \
+    --bbox -80 35 -78.5 35.1 --out /tmp/manifest.json                       # custom AOI → chosen path
+../../.venv/bin/python -m leo_pipeline.run_discovery --bbox -80 35 -78.5 35.1 --dry-run  # resolve config, no API call
+```
+
+When a `--bbox` AOI is supplied and the locations CSV is present, the agent reports how
+many of its points fall **inside** that box (not just the box itself).
+
+Tests (offline by default; the one live agent test is gated on `LEO_RUN_LIVE=1`):
+
+```bash
+../../.venv/bin/python -m pytest          # deterministic unit + contract tests
+```
+
 ## Step-0 pre-work (from the Install Guide)
 
 > Captured in `docs/rationale.md` (methodology, reception geometry, assumptions).
@@ -88,6 +109,7 @@ The `ANTHROPIC_API_KEY` (challenge testing budget) goes in `.env`, never committ
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
+| 2026-06-03 | **Add a standalone `leo-discovery` CLI + a `tests/` suite, and fix the AOI-override point count** | Wrapped A1 in `python -m leo_pipeline.run_discovery` (`--bbox`/`--out`/`--allow-fallback`/`--dry-run`) so a manifest can be produced for any AOI without the locations CSV, via a process-level `tools.AOI_OVERRIDE`. Added deterministic, offline pytest coverage of the A1 tools + agent contract (one opt-in live test gated on `LEO_RUN_LIVE=1`). **Fixed a bug:** with a `--bbox` override, `get_aoi_bbox` hardcoded `n_total/n_distinct = 0`, so the agent wrote a misleading "CSV had 0 points" note even when the box was full of points; it now counts the CSV points actually inside the override box (new `ingest.count_in_bbox`), e.g. 92,823 points for the central-NC `[-80,35,-78.5,35.1]` box, and still returns 0 only when no CSV is present. |
 | 2026-06-03 | **Build the A1 data-discovery agent** — live STAC search + ranked data manifest | Wired the discovery role into `src/`: a `DATA_DISCOVERY_AGENT` plus three live tools — `get_aoi_bbox` (AOI from the locations), `stac_search` (pystac-client over Microsoft Planetary Computer), and `write_data_manifest` (persists the H1-review manifest to `data/interim/`). The agent ranks candidates by resolution/vintage/coverage/licence and is granted `WebSearch`/`WebFetch` to source **tree-canopy height**, which no Planetary Computer collection carries (verified, 134 collections). Confirmed live against the real AOI (Carolinas/N-Georgia): real items returned for 3DEP (10 m), Copernicus GLO-30, NASADEM, and MS Buildings. Filled `docs/data-sources.md` with the curated candidate catalog; added `pystac-client`/`planetary-computer` deps. Keeps the LLM-ranks / code-queries split and writes no rasters (manifest only). |
 | 2026-06-03 | **Complete `docs/rationale.md`** — approach justification, plain-language "at-risk" definition, and a consolidated **Tuneable parameters** registry | Justified the per-azimuth horizon-profile approach over a simple buffer, a binary viewshed, and ML obstruction detection; wrote a stakeholder-facing definition of the `clear`/`at-risk`/`undetermined` bands; and consolidated every modeling knob (θ, FOV cone, azimuth weighting, mount-height sweep, σ_H budget, band cut-points, search window, CRS, dedup precision) into one registry with defaults + sensitivities. Added a **per-class, derived** obstacle search radius `R_max = (H_class,max − H_a) / tan θ_min`, and rejected a single global radius as the fixed-buffer anti-pattern. **Considered then rolled back** a per-class RF-opacity weighting (trees attenuate less than opaque buildings/terrain): without canopy-depth data it risks false `clear` verdicts for forest-ringed homes, so all obstacles remain uniform opaque blockers. |
 | 2026-06-02 | Document the **obstruction methodology, Starlink reception geometry, and assumptions** in `docs/rationale.md` | Derived the per-obstacle clear-view inequality `H_b − H_a < Dist_ab · tan θ` from the install-guide requirement, and made the two physical inputs — minimum elevation angle θ (default 25°; Apr-2026 FCC relaxation toward 10–20°, 5° above 62°N) and the azimuth/FOV cone (110° Gen3 default, 140° High Performance) — exposed parameters rather than buried constants. Adopted a three-state `clear`/`at-risk`/`undetermined` outcome, a mast-height parameter sweep, parcel-clipped alternative-site suggestions, and cross-source corroboration (nDSM + second footprint source) for "no building found." Drives the `lookup_obstruction_layer` / `compute_risk_score` tool design. |

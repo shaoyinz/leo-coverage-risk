@@ -78,5 +78,23 @@ as work proceeds.
   `data/interim/data_manifest.json` (gitignored); `python -m leo_pipeline.orchestrator`
   prints the agent + tools wired.
 
+### 2026-06-03 — Standalone discovery CLI, test suite, and AOI-override bug fix
+- **Used:** Claude Code (Opus 4.8) to add a standalone `python -m leo_pipeline.run_discovery`
+  CLI (`--bbox`/`--out`/`--allow-fallback`/`--dry-run`) wrapping the A1 agent via a
+  process-level `tools.AOI_OVERRIDE`, and a deterministic `tests/` pytest suite (A1 tools +
+  agent contract, offline; one opt-in live test gated on `LEO_RUN_LIVE=1`).
+- **Accepted as-is:** the CLI argument surface and the offline/mocked test design (STAC and
+  DuckDB stubbed) so the suite runs fast with no API key.
+- **Diverged / corrected:** found and fixed a **real bug** surfaced while reviewing a
+  `--bbox` run — `get_aoi_bbox` hardcoded `n_total/n_distinct = 0` for any override AOI, so
+  the agent wrote a misleading "locations CSV had 0 points" note even when the box was full.
+  Added `ingest.count_in_bbox` and wired it in so an override now counts the CSV points
+  actually inside the box (and still returns 0 only when no CSV is present); replaced the
+  override unit test with hermetic cases asserting both the in-box count and the no-CSV path.
+- **Verified:** full suite passes (35 deterministic tests); `count_in_bbox` checked directly
+  against the real 4.67M-row CSV — 92,823 points (91,936 distinct coords) inside the
+  central-NC `[-80,35,-78.5,35.1]` box, 0 for an out-of-data box; the `get_aoi_bbox` tool
+  returns those same counts with `source="cli_override"`.
+
 > When you accept, reject, or rework AI-generated analysis or code, add a dated entry
 > noting what and why. This is graded under "Communication & documentation."

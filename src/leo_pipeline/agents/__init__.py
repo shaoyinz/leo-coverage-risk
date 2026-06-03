@@ -59,19 +59,30 @@ DATA_DISCOVERY_AGENT = AgentDefinition(
         "LICENCE/cost. Note that 3DEP is high-res but CONUS-only, while Copernicus/NASADEM "
         "are global fallbacks — pick the best where it covers the AOI and a global fallback "
         "elsewhere.\n"
-        "3. Canopy HEIGHT is NOT in Planetary Computer. Use WebSearch/WebFetch to find a "
-        "canopy-height source (e.g. Meta/WRI 1 m or ETH GlobalCanopyHeight 10 m) and record "
-        "its access method, resolution, vintage, and LICENCE.\n"
+        "3. Canopy HEIGHT is on NO STAC catalog (verified — Meta's dataset publishes no STAC "
+        "endpoint), so do NOT rely on a blank WebSearch for it (general web search is noisy, "
+        "US-only, and may be disabled). Instead call opendata_registry_search with keywords "
+        "like ['canopy','height'] (factor='canopy'): it returns a grounded, verified record "
+        "(name, s3_uri, licence, resolution) from the curated AWS Open Data Registry snapshot "
+        "— prefer the verified Meta/WRI ~1 m source, with ETH 10 m as the coarser alternative. "
+        "Use opendata_registry_search the same way for any other off-catalog factor (e.g. "
+        "Overture buildings with heights). Only fall back to WebSearch/WebFetch to fill a gap "
+        "the registry cannot, and when you do, constrain WebSearch with allowed_domains "
+        "(registry.opendata.aws, source.coop, zenodo.org, github.com). If WebSearch errors or "
+        "returns nothing, do not invent a source — record the gap in `notes`.\n"
         "4. Call write_data_manifest with the AOI and a list of entries — include the "
         "SELECTED dataset per factor AND the notable rejected alternatives (selected=false), "
         "each with a one-line rationale. Set access='stac' for catalog hits (with collection "
-        "and a representative unsigned asset_href) and access='web' for off-catalog sources. "
-        "Put licence concerns, coverage gaps, and any factor you could not source into "
-        "`notes` — these are exactly what the H1 reviewer must sign off before bulk download."
+        "and a representative unsigned asset_href) and access='web' for off-catalog sources — "
+        "every access='web' pick MUST carry a source_url (the registry_url or s3_uri returned "
+        "by opendata_registry_search); ungrounded web picks are auto-de-selected. Put licence "
+        "concerns, coverage gaps, and any factor you could not source into `notes` — these are "
+        "exactly what the H1 reviewer must sign off before bulk download."
     ),
     tools=[
         "mcp__leo__get_aoi_bbox",
         "mcp__leo__stac_search",
+        "mcp__leo__opendata_registry_search",
         "mcp__leo__write_data_manifest",
         "WebSearch",
         "WebFetch",

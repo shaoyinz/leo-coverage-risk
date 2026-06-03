@@ -55,6 +55,7 @@ class DatasetCandidate:
     collection: str | None = None
     catalog: str | None = None  # STAC catalog label/url, when access == "stac"
     asset_href: str | None = None  # representative asset (COG/footprint), not all tiles
+    source_url: str | None = None  # registry page / S3 URI grounding an access == "web" pick
     crs: str | None = None
     gsd_m: float | None = None  # ground sample distance (resolution) in metres
     vintage: str | None = None  # acquisition date / interval

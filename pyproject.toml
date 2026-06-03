@@ -40,10 +40,22 @@ dev = [
     "jupyterlab>=4.0",
     "ipykernel>=6.0",
     "ruff>=0.6",
+    "pytest>=8",                  # test suite (tools + agent contract); see tests/
 ]
+
+[project.scripts]
+# One-shot entrypoint for the A1 data-discovery agent (after `pip install -e .`);
+# without reinstalling, use `python -m leo_pipeline.run_discovery`.
+leo-discovery = "leo_pipeline.run_discovery:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: opt-in run that spawns the Claude CLI and uses ANTHROPIC_API_KEY (run with -m live)",
+]
 
 [tool.ruff]
 line-length = 100

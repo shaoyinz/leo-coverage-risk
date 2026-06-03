@@ -51,20 +51,74 @@ class Discovery:
     why ``candidate_collections["canopy"]`` is empty rather than missing.
     """
 
-    # STAC catalog endpoints the agent may query (label -> root URL).
+    # STAC catalog endpoints the agent may query (label -> root URL). Planetary Computer
+    # is the primary; Earth Search (Element84, AWS-hosted) is a second general STAC the
+    # agent can probe for collections PC lacks. NOTE: tree-canopy *height* is not on any of
+    # these (Meta's "dataforgood-fb-forests" publishes no STAC endpoint — verified), which
+    # is why canopy is sourced via ``opendata_registry_search`` / ``web_sources`` instead.
     stac_catalogs: dict[str, str] = field(
         default_factory=lambda: {
             "planetary_computer": "https://planetarycomputer.microsoft.com/api/stac/v1",
+            "earth_search": "https://earth-search.aws.element84.com/v1",
         }
     )
     # Obstruction factor -> candidate STAC collection ids (best first). ``canopy`` is
-    # intentionally empty: off-catalog, sourced via WebSearch/WebFetch.
+    # intentionally empty: no STAC catalog hosts canopy *height*, so it is sourced
+    # off-catalog via ``opendata_registry_search`` + ``web_sources`` (verify, don't guess).
     candidate_collections: dict[str, list[str]] = field(
         default_factory=lambda: {
             "terrain": ["3dep-seamless", "cop-dem-glo-30", "nasadem"],
             "surface": ["3dep-lidar-dsm"],
             "buildings": ["ms-buildings"],
             "canopy": [],
+        }
+    )
+    # Curated off-catalog sources, keyed by obstruction factor. This is a vetted snapshot of
+    # AWS Open Data Registry (and other open) datasets so the discovery agent can *verify* a
+    # known-good candidate rather than *discover* one from a blank web search — the web path
+    # is unreliable (general search, US-only, sometimes disabled at the org level), which is
+    # how a well-known dataset like Meta canopy height gets missed. ``registry_id`` is the
+    # awslabs/open-data-registry YAML basename used by ``opendata_registry_search`` to fetch
+    # and verify the live record; ``None`` means the source is not in that registry.
+    web_sources: dict[str, list[dict]] = field(
+        default_factory=lambda: {
+            "canopy": [
+                {
+                    "name": "High Resolution Canopy Height Maps by WRI and Meta",
+                    "registry_id": "dataforgood-fb-forests",
+                    "registry_url": "https://registry.opendata.aws/dataforgood-fb-forests/",
+                    "s3_uri": "s3://dataforgood-fb-data/forests/v1/alsgedi_global_v6_float/",
+                    "gsd_m": 1.0,
+                    "vintage": "2009-2020 (Maxar imagery epoch)",
+                    "license": "CC-BY-4.0",
+                    "description": "Global ~1 m tree-canopy HEIGHT from ML on Maxar imagery.",
+                    "keywords": ["canopy", "height", "tree", "forest", "chm", "vegetation"],
+                },
+                {
+                    "name": "ETH Global Sentinel-2 10m Canopy Height 2020",
+                    "registry_id": None,  # Zenodo / Google Earth Engine, not the AWS registry
+                    "registry_url": "https://langnico.github.io/globalcanopyheight/",
+                    "s3_uri": None,
+                    "gsd_m": 10.0,
+                    "vintage": "2020",
+                    "license": "CC-BY-4.0",
+                    "description": "Global 10 m canopy height (ETH Zurich); coarser alternative.",
+                    "keywords": ["canopy", "height", "tree", "forest", "eth", "sentinel"],
+                },
+            ],
+            "buildings": [
+                {
+                    "name": "Overture Maps Foundation",
+                    "registry_id": "overturemaps",
+                    "registry_url": "https://registry.opendata.aws/overturemaps/",
+                    "s3_uri": "s3://overturemaps-us-west-2/release/",
+                    "gsd_m": None,
+                    "vintage": "rolling",
+                    "license": "CDLA-Permissive-2.0",
+                    "description": "Global building footprints, many with HEIGHTS (vector).",
+                    "keywords": ["building", "footprint", "height", "overture", "structure"],
+                },
+            ],
         }
     )
     # Where write_data_manifest persists the H1 review artifact.
