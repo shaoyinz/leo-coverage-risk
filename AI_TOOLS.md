@@ -205,5 +205,57 @@ as work proceeds.
   agentically verified** — no live A5 agent run (same API-key budget block as A2–A4); the engine
   + tool wiring are exercised.
 
+### 2026-06-04 — Fix spurious `undetermined` + redefine the confidence flag
+- **Used:** Claude Code (Opus 4.8) to diagnose a real end-to-end run (160/321 `undetermined`,
+  78% low-confidence), trace the root cause through `horizon.py` / `tools.fetch_aligned_surface`
+  / `config.Analysis`, then implement and verify the fix.
+- **Diverged / corrected:** the AI's first instinct was to relax thresholds; on inspection the
+  real issues were (a) A2 passing a *partial* lidar surface through with holes, and (b) the
+  confidence flag measuring sampling over the whole 1500 m ray. Reframed via `/plan` with two
+  user-confirmed decisions: a **gap-fill mosaic** (lidar over a complete DEM, per-pixel
+  provenance band) so coverage gaps stop becoming `undetermined`, and a **provenance + near-field
+  + σ_H-margin, config-driven** confidence flag (cut-points moved into `config.Analysis`).
+- **Verified:** 12 new offline tests (composite fill, partial-lidar→full-coverage, provenance,
+  confidence table); full suite **167 passed / 2 skipped**. Cold-cache offline e2e on the same
+  tile: mosaic `valid_fraction 0.97`, **0 `undetermined`**, confidence tracks provenance (DEM-fill
+  → low, lidar → high/medium), A4's `undetermined_rate` anomaly gone. Bumped `spec_version`
+  → `spec-2026.07-mosaic`. Not agentically verified (same API-key budget block as A2–A5).
+
+### 2026-06-04 — Live agentic verification of A2–A5 (budget block lifted)
+- **Used:** Claude Agent SDK (Opus 4.8 driver / Sonnet 4.6 workers) to drive A2–A5 **live, LLM
+  in the loop** for the first time — the agentic run deferred in every prior entry as the
+  "API-key budget block." Each standalone CLI was run without `--compute` / `--dry-run`, on the
+  central-NC tile `32617_100_776` (4,827 locations, its 10 m UTM 17N lidar-mosaic surface):
+  - **A2 (`leo-ingestion --limit 2`):** the driver spawned **two parallel ingestion subagents**,
+    each calling the `cache_rw` MCP tool; both tiles were cache hits (99.7–99.9% lidar, ≤0.3%
+    DEM-fill, valid_fraction 1.0) and the agents short-circuited per the cache-first policy.
+  - **A3 (`leo-analysis --tile`):** scored all 4,827 points (4,824 clear / 3 at_risk / 0 severe /
+    0 undetermined; confidence 4,684 high / 142 med / 1 low), then **delegated a mount-height
+    sweep** to the geo-analysis subagent, which called `compute_sky_obstruction` live and found
+    all 3 at_risk locations clear when the dish is raised 2.0 m → 3.0 m.
+  - **A4 (`leo-qa --tile`):** the qa subagent called `qa_input_audit` (4.67 M rows, **0
+    quarantined**) and `qa_location_batch` (4,827 findings, **0 anomalies**), triaged the 3
+    at_risk findings against the band cut-points, and returned **PASS** (`qa-2026.06-v1`).
+  - **A5 (`leo-report --tile`):** the reporting subagent called `aggregate_findings` → `render_map`
+    → `query_locations` → `write_report`, regenerating `decision_log.md`, `coverage_map.html`,
+    `locations.geojson`, and `locations.pmtiles`. Officer log leads caveat-first (county 37119 NC
+    as the on-site-verification priority, "verify on site — NOT a service guarantee", spec_version).
+- **Accepted as-is:** the live runs reproduced the deterministic engine's numbers exactly (same
+  4,824/3/0/0 split, same spec versions), confirming the "code computes, LLM picks params /
+  narrates" boundary holds end-to-end under a real agent loop, not just in the offline tests.
+- **Diverged / corrected:** **smoke-tested the reset key first** (a Haiku ping) before spending
+  Opus budget. Verified the **A3 driver added genuine value** beyond the deterministic path — the
+  mount-height sweep ("clear if raised to 3.0 m") is an LLM-orchestrated follow-up, not a canned
+  output. Noted the **A5 subagent's own honesty flag**: it could not read A4's anomaly manifest
+  through any granted tool, so it reconstructed the two anomalies from aggregation facts and marked
+  both H2 statuses **PENDING** rather than asserting an unverifiable sign-off — left as-is because
+  refusing to fabricate a clearance is the correct behaviour for the H2 gate (a follow-up could
+  grant A5 a read-only handle to A4's `qa_report.json` so the disposition is sourced, not inferred).
+- **Verified:** all four CLIs exited 0; artifacts re-stamped at run time (`decision_log.md`
+  10:53, map/geojson/pmtiles 10:52) under `spec-2026.07-mosaic` / `qa-2026.06-v1` /
+  `report-2026.06-v1`. Scope was deliberately **one tile, not the full 5,176** — the agentic path
+  is now proven live; a full-dataset run still uses the no-LLM `leo-full` engine for cost. The
+  README's "Not yet agentically verified" caveats for A2–A5 are now satisfied.
+
 > When you accept, reject, or rework AI-generated analysis or code, add a dated entry
 > noting what and why. This is graded under "Communication & documentation."

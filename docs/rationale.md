@@ -254,6 +254,20 @@ This is also why canopy *cover fraction* (e.g. NLCD percent-cover) is not a subs
 *height*: 100% cover by 3 m shrubs and 100% cover by 30 m conifers give identical cover but wildly
 different horizons. Cover is used only as a fallback / cross-check (see [data-sources](data-sources.md)).
 
+**Best-available-per-pixel mosaic (not a whole-tile source choice).** Lidar DSM coverage is
+*project-based* and patchy — a 5 km tile routinely sits half-inside a lidar collection and half-outside.
+Treating the surface as a single source per tile would then leave the uncovered half with no datum, and
+every point there would fall to `undetermined` (≈50% of a real tile in testing) — a coverage artifact, not
+a genuine "can't judge." Instead A2 builds the surface as a **mosaic, layered by trust**: a globally
+complete DEM is the base (it fills every hole), DEM + canopy where a canopy layer exists, and the lidar
+DSM overrides wherever it has a real value. Because the DEM is complete, the fused surface is too, so
+`undetermined` is reserved for points with *no* datum at all (outside even the DEM — an AOI edge, rare).
+Each pixel also carries a **provenance code** (lidar / DEM+canopy / bare-DEM fill) written as a second
+raster band, so the analysis stage knows exactly what data each point was scored on — which is what drives
+the confidence flag below. A point scored on bare-DEM fill is still *scored* (a coarse signal beats a
+shrug) but flagged low-confidence, because bare terrain cannot see the trees or structures a real
+obstruction check needs.
+
 **vs. ML obstruction detection** (e.g. a CNN over aerial or street imagery). Such a model could classify
 "obstructed/clear" or segment canopy and rooftops, but we reject it as the *primary* method for three
 reasons: (1) *interpretability* — the physics kernel gives an auditable clearance margin
@@ -286,7 +300,7 @@ instead of a rooftop scan. It feeds the 0..1 score in `compute_risk_score`, whic
 | 🟢 **clear** | < ~1%, with clearance margin comfortably negative beyond the data error | The sky the dish needs is open; service quality likely good. |
 | 🟡 **at-risk — marginal** | ~1–10% (or margin within a few $\sigma_H$ of zero) | Periodic dropouts possible; the lower end (≲5%) is usually tolerable, the upper end trends to degraded. Often fixable by raising the mount or nudging placement. |
 | 🔴 **at-risk — severe** | > ~10% | Meaningful, persistent obstruction; likely needs re-siting or a higher mount. |
-| ⚪ **undetermined** | any | Dish height could not be established, or a source layer was missing / stale / degraded — needs human review, not a verdict. |
+| ⚪ **undetermined** | n/a | **No elevation datum at all** under the point — not even the globally complete DEM (an AOI-edge gap). Needs human review, not a verdict. Coverage *gaps in the lidar* are no longer undetermined: the DEM fills them and the point is scored at low confidence (see the mosaic note above). |
 
 The 🟡 and 🔴 rows are both reported under the single engineering state **`at-risk`** — the doc's
 three-state model is `clear` / `at-risk` / `undetermined`; the severity split is a sub-label for
@@ -298,6 +312,26 @@ tuned on a sample against the Starlink app before being treated as ground truth 
 multi-metre vertical error, and the mount height $H_a$ is usually unknown for a remote assessment. A crisp
 threshold would manufacture false precision. The bands — and especially the `undetermined` state — are how
 the output stays honest about what public data can and cannot settle (see "Vertical uncertainty" above).
+
+**Confidence flag (high / medium / low).** Orthogonal to the risk tier, every score carries a confidence
+built from three *physical, configurable* signals — not hand-tuned constants buried in code:
+1. **Surface provenance under the point** (the dominant term): a **lidar** pixel (carries canopy +
+   structures, measured) → high; a **DEM + canopy** pixel (modelled) → medium; a **bare-DEM fill** pixel
+   (cannot see trees/structures at all) → low.
+2. **Near-field sampling coverage** — the share of valid surface samples *within the radius that actually
+   sets the horizon* (`confidence_near_field_m`, ~500 m), **not** the full ray. Gaps in the near field cost
+   a notch (or two); distant gaps — which cannot change the verdict — no longer penalise an otherwise-clean
+   reading. (This was the old artifact: wide-open points were knocked to low purely because *distant* rays
+   crossed nodata.)
+3. **$\sigma_H$ clearance margin** — the verdict is knocked down one notch *only* when the controlling
+   surface sits within $\pm\sigma_H$ of the $\theta$-line, i.e. it could flip under the data's vertical
+   error. An unambiguous reading (wide-open sky, or an obstacle clearing the line by $\gg \sigma_H$) is
+   **not** penalised. This is the documented $\sigma_H$ *borderline* signal; a full probabilistic
+   clearance-margin model remains the next step.
+
+Low confidence is therefore an *honest, auditable* statement — "we scored this on coarse data, verify on
+site" — and the run-level low-confidence share (flagged by A4) reads as the fraction of points that fell on
+bare-DEM fill rather than lidar, not a sampling artifact.
 
 **For a state broadband officer:**
 
@@ -349,6 +383,8 @@ also makes the sensitivity analysis the methodology promises *runnable* rather t
 | `clear_margin_sigma` | ~2–3 $\sigma_H$ | How many $\sigma_H$ the margin must clear to score `clear` rather than fall to `at-risk`. Controls the conservatism of the verdict. |
 | `risk_score_weights` | implementation default | How canopy / terrain / building factors combine into the 0..1 score in `compute_risk_score`. |
 | `canopy_state` | **leaf-on** (worst case) | Toggle for seasonal foliage; leaf-on keeps `clear` verdicts conservative. |
+| `confidence_near_field_m` | **500 m** | Radius within which ray-sampling coverage drives the confidence flag (not the full `max_radius_m` ray). Larger → distant gaps start to matter again; this is what stops distant nodata from penalising a clean near-field verdict. |
+| `conf_near_sampled_high` / `_med` | **0.9 / 0.5** | Near-field sampled-fraction cut-points for the confidence knock-downs (≥ high → none, ≥ med → −1, else −2). **Calibration defaults**, like the risk bands. |
 
 ### Search & computation
 
