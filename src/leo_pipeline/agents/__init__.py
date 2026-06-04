@@ -219,6 +219,53 @@ QA_AGENT = AgentDefinition(
 )
 
 
+# --- Reporting / insight agent (A5) ---------------------------------------------------
+# Scope: turn the A3 findings (+ A4 anomalies) into the three things an officer consumes —
+# county/state aggregates, an interactive map, and a plain-English decision log. The
+# aggregation + map tiles are deterministic (leo_pipeline.report); the LLM only writes the
+# narrative and decides what to spotlight. Read-only over the data + a scoped write into
+# outputs/; never re-scores, never fetches data. Feeds the H2 insight sign-off
+# (architecture.md §7).
+REPORTING_AGENT = AgentDefinition(
+    description=(
+        "Aggregates A3 findings to county/state, builds the interactive risk map, and writes "
+        "the officer-facing decision log for the H2 sign-off."
+    ),
+    prompt=(
+        "You are the reporting/insight agent (A5 in docs/architecture.md). Turn the scored "
+        "obstruction findings into what a state broadband officer actually reads: a "
+        "prioritised summary, an interactive map, and a plain-English decision log. The "
+        "numbers and the map are computed by the tools — your job is to assemble them and "
+        "WRITE THE NARRATIVE, not to re-score or invent figures. You are read-only over the "
+        "pipeline data; your only write is the report you compose.\n\n"
+        "1. Call aggregate_findings to roll the findings up to county + state "
+        "(household-weighted, ranked by at-risk households). This is your source of truth for "
+        "every number you cite — never compute your own.\n"
+        "2. Call render_map to build the interactive risk map (a per-location point layer "
+        "coloured by risk tier, tiled to PMTiles + a MapLibre HTML viewer in outputs/). If the "
+        "note says PMTiles was skipped (tippecanoe missing), report that honestly — the "
+        "GeoJSON + HTML still exist.\n"
+        "3. Compose the officer-facing decision log in plain English: the headline tier "
+        "breakdown, the priority counties/states, and — critically — the CAVEATS (the "
+        "undetermined / low-confidence share, that this is a prioritised list to verify on "
+        "site and NOT a service guarantee, and the obstruction spec_version it was scored "
+        "under). If A4 surfaced anomalies, summarise them and their H2 status; never present "
+        "an unreviewed critical anomaly as a clean result. Use query_locations only to "
+        "cross-check a count you want to cite.\n"
+        "4. Call write_report to persist that narrative (decision_log.md) into outputs/. "
+        "Report the artifact paths (aggregates, map HTML, decision log) for the H2 reviewer, "
+        "then stop."
+    ),
+    tools=[
+        "mcp__leo__aggregate_findings",
+        "mcp__leo__render_map",
+        "mcp__leo__write_report",
+        "mcp__leo__query_locations",
+    ],
+    model="inherit",
+)
+
+
 def all_agents() -> dict[str, AgentDefinition]:
     """Map of agent name -> definition for ClaudeAgentOptions(agents=...)."""
     return {
@@ -226,6 +273,7 @@ def all_agents() -> dict[str, AgentDefinition]:
         "data-discovery": DATA_DISCOVERY_AGENT,
         "geo-analysis": GEO_ANALYSIS_AGENT,
         "qa": QA_AGENT,
+        "reporting": REPORTING_AGENT,
     }
 
 
@@ -234,6 +282,7 @@ __all__ = [
     "DATA_DISCOVERY_AGENT",
     "GEO_ANALYSIS_AGENT",
     "QA_AGENT",
+    "REPORTING_AGENT",
     "all_agents",
     "MODELS",
 ]

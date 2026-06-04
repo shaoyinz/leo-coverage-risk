@@ -138,6 +138,18 @@ class QAAnomaly:
 
 
 @dataclass
+class ReportArtifact:
+    """A5 output: one published artifact (a reference, not its contents) — the interactive
+    map, the GeoJSON it was tiled from, or the officer-facing decision log. ``kind`` labels
+    it (``map_html`` | ``pmtiles`` | ``geojson`` | ``decision_log`` | ``aggregates``) so the
+    orchestrator can surface the right links to the H2 reviewer (architecture §7)."""
+
+    kind: str
+    path: str
+    description: str = ""
+
+
+@dataclass
 class PipelineState:
     """Mutable state threaded through the agent graph."""
 
@@ -155,6 +167,9 @@ class PipelineState:
     # Output anomalies from the QA agent (A4; empty until A4 runs). Non-empty + any
     # critical severity is what the orchestrator surfaces to the H2 human gate.
     anomalies: list[QAAnomaly] = field(default_factory=list)
+    # Published artifacts from the reporting agent (A5; empty until A5 runs): the map,
+    # the decision log, the aggregates — references the orchestrator hands to the H2 gate.
+    reports: list[ReportArtifact] = field(default_factory=list)
     # Free-form notes/log entries each agent can append for the decision log.
     notes: list[str] = field(default_factory=list)
     # Set when an agent hits an unrecoverable problem; orchestrator surfaces for intervention.

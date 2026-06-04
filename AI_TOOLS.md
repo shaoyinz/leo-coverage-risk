@@ -175,5 +175,35 @@ as work proceeds.
   anomalies via the live dedup-map join. **Not yet agentically verified** — no live A4 agent run
   has been driven (same API-key budget block as A2/A3); the engine + tool wiring are exercised.
 
+### 2026-06-03 — Reporting/insight agent (A5): county/state aggregates + interactive map + decision log
+- **Used:** Claude Code (Opus 4.8) to design and build the A5 role end-to-end: a deterministic
+  `report.py` engine (county+state household-weighted aggregation; a GeoJSON→PMTiles→MapLibre
+  interactive map; a plain-English decision-log renderer), a version-stamped `config.Reporting`
+  spec, three least-privilege tools (`aggregate_findings`, `render_map`, `write_report`), a
+  `ReportArtifact` state record, the `reporting` AgentDefinition, a standalone `leo-report` CLI
+  (with a no-API `--compute` path), and an offline test suite. This completes the
+  Orchestrator + A1–A5 design in `src/`.
+- **Accepted as-is:** the code-aggregates / LLM-writes-narrative split (the agent never invents
+  a number — it cites `aggregate_findings` output and composes prose); reusing the A4 county-FIPS
+  + `n_locations` dedup-map join for household weighting; reusing `qa`'s tier constants rather
+  than redefining them.
+- **Diverged / corrected:** scope set by **clarifying questions** to the user — chose
+  **tippecanoe→PMTiles+MapLibre** for the map (over pydeck, which isn't installed, and over a
+  static matplotlib choropleth) and **county + state rollup** as the reporting unit. Hardened
+  two things over the naive AI version: made `render_map` **degrade gracefully** when tippecanoe
+  is absent (GeoJSON + HTML still written, the note says so) instead of failing, and gave
+  `write_report` a **path-sanitising guard** (basename-only, extension allow-list) so the LLM's
+  one write surface can't traverse or drop executable files. Kept the officer report
+  **caveat-first** (undetermined/low-confidence share, "verify on site, not a guarantee", the
+  spec_version, the A4 H2 status) per `docs/rationale.md`, rather than leading with confident
+  numbers.
+- **Verified:** 25 new offline tests (aggregation, GeoJSON, the MapLibre HTML builder, the
+  decision-log template, the tools, and the CLI; the real-tippecanoe PMTiles test is `skipif`-
+  gated on the binary). Full suite 160 passed / 2 skipped (opt-in live). End-to-end offline: a
+  synthetic 60-finding run produced the county+state rollup, a real `locations.pmtiles` via
+  tippecanoe, the MapLibre `coverage_map.html`, and the `decision_log.md`. **Not yet
+  agentically verified** — no live A5 agent run (same API-key budget block as A2–A4); the engine
+  + tool wiring are exercised.
+
 > When you accept, reject, or rework AI-generated analysis or code, add a dated entry
 > noting what and why. This is graded under "Communication & documentation."

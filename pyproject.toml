@@ -51,6 +51,7 @@ leo-tiling = "leo_pipeline.tiling:main"             # tile the de-duplicated wor
 leo-ingestion = "leo_pipeline.run_ingestion:main"   # A2: aligned per-tile surfaces
 leo-analysis = "leo_pipeline.run_analysis:main"     # A3: per-location obstruction scores
 leo-qa = "leo_pipeline.run_qa:main"                 # A4: input audit + output-anomaly QA
+leo-report = "leo_pipeline.run_report:main"         # A5: aggregates + interactive map + decision log
 
 [tool.setuptools.packages.find]
 where = ["src"]

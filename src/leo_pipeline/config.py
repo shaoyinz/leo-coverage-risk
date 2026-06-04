@@ -275,12 +275,57 @@ class QA:
     reports_dir: Path = REPO_ROOT / "data" / "interim" / "qa"
 
 
+@dataclass(frozen=True)
+class Reporting:
+    """Config for the A5 reporting/insight agent — aggregates, the interactive map, and the
+    officer-facing decision log (architecture.md §2, the A5 node; §7 H2 insight sign-off).
+
+    A5 turns the A3 obstruction findings (and the A4 anomalies) into the three things a state
+    broadband officer actually consumes: a **county + state aggregate** of who is at risk
+    (household-weighted by ``n_locations`` via the dedup map), an **interactive map** (a
+    per-location point layer coloured by risk tier, served as PMTiles + a self-contained
+    MapLibre viewer so it scales to ~1M points with no server), and a **plain-English
+    decision log**. The aggregation + map tiles are deterministic code (``leo_pipeline.report``);
+    the LLM only writes the narrative. Version-stamped so a published report is reproducible.
+    """
+
+    # Stamp recorded on every report so a published artifact is reproducible (architecture §4).
+    report_version: str = "report-2026.06-v1"
+    # Where A5 writes its artifacts (map HTML/PMTiles, GeoJSON, decision-log markdown + JSON).
+    outputs_dir: Path = REPO_ROOT / "outputs"
+
+    # How many highest-risk counties to spotlight in the decision log's priority table
+    # (the full ranking is always in the JSON sidecar).
+    top_n_counties: int = 15
+
+    # Risk-tier -> hex colour, shared by the map layer and the report legend. Matches the
+    # 🟢/🟡/🔴/⚪ banding in docs/rationale.md (clear / at-risk / severe / undetermined).
+    tier_colors: dict[str, str] = field(
+        default_factory=lambda: {
+            "clear": "#1a9850",
+            "at_risk": "#fdae61",
+            "severe": "#d73027",
+            "undetermined": "#999999",
+        }
+    )
+
+    # Vector-tile zoom range for tippecanoe (point layer). z3 ≈ CONUS, z12 ≈ neighbourhood —
+    # enough to zoom from the AOI overview down to individual at-risk clusters.
+    map_min_zoom: int = 3
+    map_max_zoom: int = 12
+    # Layer name embedded in the PMTiles + referenced by the MapLibre style.
+    map_layer_name: str = "locations"
+    # Base raster tiles for the MapLibre viewer (no API key; OSM standard tiles).
+    map_basemap_url: str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+
+
 PATHS = Paths()
 MODELS = Models()
 DISCOVERY = Discovery()
 INGESTION = Ingestion()
 ANALYSIS = Analysis()
 QA = QA()
+REPORTING = Reporting()
 
 
 def require_api_key() -> str:

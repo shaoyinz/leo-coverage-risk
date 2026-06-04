@@ -40,8 +40,11 @@ def build_options() -> ClaudeAgentOptions:
             "download; (2) ingestion (A2) reads COG windows per tile, reprojects them to a "
             "metric CRS, and fuses an aligned pseudo-DSM (or passes through a true lidar "
             "DSM) for the approved datasets; (3) geo-analysis runs the horizon analysis on "
-            "those surfaces and scores risk; (4) qa validates the outputs. Surface "
-            "anomalies for human review."
+            "those surfaces and scores risk; (4) qa audits the input rows and scans the "
+            "outputs for anomalies; (5) reporting aggregates the findings to county/state, "
+            "builds the interactive risk map, and writes the officer-facing decision log. "
+            "Surface anomalies and the final insights for human review (the H2 gate) before "
+            "publication."
         ),
     )
 

@@ -8,7 +8,9 @@ persistence); the A2 surface-ingestion tools ``stac_item_read`` /
 the A3 analysis tools ``compute_sky_obstruction`` / ``find_clear_sky_spot`` (the
 per-azimuth horizon-profile obstruction scoring in ``leo_pipeline.horizon``); and the
 A4 QA tools ``qa_input_audit`` / ``qa_location_batch`` (deterministic input-quality +
-output-anomaly checks in ``leo_pipeline.qa``).
+output-anomaly checks in ``leo_pipeline.qa``); and the A5 reporting tools
+``aggregate_findings`` / ``render_map`` / ``write_report`` (county+state rollups, the
+PMTiles+MapLibre interactive map, and the officer decision log in ``leo_pipeline.report``).
 """
 
 from __future__ import annotations
@@ -26,7 +28,8 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from leo_pipeline import ingest
 from leo_pipeline import qa as qa_engine
-from leo_pipeline.config import ANALYSIS, DISCOVERY, INGESTION, QA
+from leo_pipeline import report as report_engine
+from leo_pipeline.config import ANALYSIS, DISCOVERY, INGESTION, QA, REPORTING
 from leo_pipeline.state import DataManifest, DatasetCandidate
 
 # Statements the read-only query tool will accept. Anything else (INSERT, COPY,
@@ -1416,6 +1419,147 @@ async def qa_location_batch(args: dict[str, Any]) -> dict[str, Any]:
     return _text(report)
 
 
+# --- A5 reporting / insight tools -----------------------------------------------------
+# The reporting agent reasons only about the *narrative* (write the officer-facing summary);
+# these tools do the deterministic aggregation + map-tile build (leo_pipeline.report) and a
+# scoped write into outputs/. They never re-score or touch the open web. See docs/
+# architecture.md (A5, §7 H2 insight sign-off).
+
+
+def _coord_lonlat_map(
+    findings: list[dict[str, Any]],
+) -> dict[str, tuple[float, float]]:
+    """Best-effort {location_id -> (lon, lat)} for the findings, read from the unique-
+    coordinate work list, so A5 can place each finding on the map. Restricted to the
+    coord_ids in the findings; returns {} when the work list is absent or unreadable (the
+    map then falls back to any lon/lat already on the findings)."""
+    coord_ids = {cid for f in findings if (cid := _coord_id(f.get("location_id"))) is not None}
+    if not coord_ids:
+        return {}
+    unique_path = ingest.PATHS.data_interim / ingest.UNIQUE_COORDS_FILE
+    if not unique_path.exists():
+        return {}
+    try:
+        import duckdb
+
+        con = duckdb.connect()
+        id_list = ",".join(str(c) for c in sorted(coord_ids))
+        uq = str(unique_path).replace("'", "''")
+        rows = con.execute(
+            f"SELECT coord_id, longitude, latitude FROM read_parquet('{uq}') "
+            f"WHERE coord_id IN ({id_list})"
+        ).fetchall()
+        con.close()
+    except Exception:
+        return {}
+    return {f"coord_{int(c)}": (float(lon), float(lat)) for c, lon, lat in rows}
+
+
+@tool(
+    "aggregate_findings",
+    "Roll the A3 obstruction findings up to county + state (household-weighted by the "
+    "n_locations behind each unique coordinate), ranked by at-risk households — the "
+    "prioritised summary a broadband officer acts on. Deterministic; you do NOT re-score. "
+    "Pass findings inline via `findings`, or omit it to load the per-tile findings A3 wrote "
+    "to data/interim/analysis (optionally just one `tile`). County grouping needs the dedup "
+    "maps + locations CSV on disk; without them only run totals are returned. Returns "
+    "{report_version, summary, grouped_by, counties:[...], states:[...]} (counties/states "
+    "carry households, tier_households, at_risk_households, at_risk_rate).",
+    {"findings": list, "tile": str, "findings_dir": str},
+)
+async def aggregate_findings(args: dict[str, Any]) -> dict[str, Any]:
+    findings_dir = (
+        Path(args["findings_dir"]).expanduser() if args.get("findings_dir")
+        else ANALYSIS.findings_dir
+    )
+    tile = (args.get("tile") or "").strip() or None
+    findings, sources = _load_findings(args.get("findings"), findings_dir, tile)
+    if not findings:
+        return _error(
+            "no findings to aggregate — pass `findings` inline, or run the analysis first "
+            f"(python -m leo_pipeline.run_analysis --compute); looked in {findings_dir}"
+        )
+    county_of, weight_of = _county_weight_maps(findings)
+    agg = report_engine.aggregate_findings(
+        findings, county_of=county_of or None, weight_of=weight_of or None
+    )
+    agg["n_findings"] = len(findings)
+    agg["sources"] = sources
+    if not county_of:
+        agg.setdefault("notes", []).append(
+            "county/state grouping skipped (dedup maps / CSV not on disk); run totals only"
+        )
+    return _text(agg)
+
+
+@tool(
+    "render_map",
+    "Build the interactive risk map from the A3 findings: a per-location GeoJSON point layer "
+    "coloured by risk tier, tiled to PMTiles with tippecanoe (scales to ~1M points, no "
+    "server), plus a self-contained MapLibre HTML viewer. Deterministic; you do NOT re-score. "
+    "Pass findings inline via `findings`, or omit it to load A3's per-tile findings "
+    "(optionally one `tile`). `run_tiles` (default true) toggles the tippecanoe step — if the "
+    "binary is missing the GeoJSON + HTML are still written and the note says so. Writes into "
+    "outputs/. Returns {n_features, geojson, html, pmtiles?, center, zoom, note}.",
+    {"findings": list, "tile": str, "findings_dir": str, "run_tiles": bool},
+)
+async def render_map(args: dict[str, Any]) -> dict[str, Any]:
+    findings_dir = (
+        Path(args["findings_dir"]).expanduser() if args.get("findings_dir")
+        else ANALYSIS.findings_dir
+    )
+    tile = (args.get("tile") or "").strip() or None
+    findings, _ = _load_findings(args.get("findings"), findings_dir, tile)
+    if not findings:
+        return _error(
+            "no findings to map — pass `findings` inline, or run the analysis first "
+            f"(python -m leo_pipeline.run_analysis --compute); looked in {findings_dir}"
+        )
+    run_tiles = args.get("run_tiles")
+    run_tiles = True if run_tiles is None else bool(run_tiles)
+    lonlat_of = _coord_lonlat_map(findings)
+    map_info = report_engine.build_map(
+        findings, REPORTING.outputs_dir, lonlat_of=lonlat_of or None, run_tiles=run_tiles
+    )
+    if map_info["n_features"] == 0:
+        map_info["warning"] = (
+            "0 mappable features — findings carried no lon/lat and no unique_coords work list "
+            "was on disk to resolve them"
+        )
+    return _text(map_info)
+
+
+# Extensions write_report will persist (officer report + its data sidecar); anything else is
+# rejected so the agent cannot write executable or arbitrary files through this surface.
+_REPORT_EXTS = (".md", ".json", ".txt", ".html")
+
+
+@tool(
+    "write_report",
+    "Persist the officer-facing report you composed into the outputs/ directory (the A5 "
+    "deliverable for the H2 sign-off). `content` is the full text (typically the markdown "
+    "decision log); `filename` is the basename to write (default 'decision_log.md'; must end "
+    ".md/.json/.txt/.html — no paths or traversal). Use this for the narrative you write; use "
+    "aggregate_findings / render_map for the numbers and the map. Returns {path, bytes}.",
+    {"content": str, "filename": str},
+)
+async def write_report(args: dict[str, Any]) -> dict[str, Any]:
+    content = args.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return _error("content must be a non-empty string")
+    filename = (args.get("filename") or "decision_log.md").strip()
+    # Basename only — reject any directory component or traversal.
+    if filename != Path(filename).name or filename in ("", ".", ".."):
+        return _error(f"filename must be a bare basename, got {filename!r}")
+    if not filename.lower().endswith(_REPORT_EXTS):
+        return _error(f"filename must end with one of {list(_REPORT_EXTS)}")
+    out_dir = REPORTING.outputs_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / filename
+    path.write_text(content)
+    return _text({"path": str(path), "bytes": len(content.encode("utf-8"))})
+
+
 # In-process MCP server bundling the tools above. Reference its name in
 # ClaudeAgentOptions(mcp_servers=...) and allow the "mcp__leo__<tool>" identifiers.
 LEO_TOOLS_SERVER = create_sdk_mcp_server(
@@ -1435,6 +1579,9 @@ LEO_TOOLS_SERVER = create_sdk_mcp_server(
         find_clear_sky_spot,
         qa_input_audit,
         qa_location_batch,
+        aggregate_findings,
+        render_map,
+        write_report,
     ],
 )
 
@@ -1453,4 +1600,7 @@ TOOL_NAMES = [
     "mcp__leo__find_clear_sky_spot",
     "mcp__leo__qa_input_audit",
     "mcp__leo__qa_location_batch",
+    "mcp__leo__aggregate_findings",
+    "mcp__leo__render_map",
+    "mcp__leo__write_report",
 ]
