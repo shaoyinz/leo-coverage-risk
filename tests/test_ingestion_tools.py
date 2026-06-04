@@ -98,6 +98,81 @@ def test_fuse_pseudo_dsm_clamps_negative_canopy():
     assert tools._fuse_pseudo_dsm(dem, canopy, -9999.0, -9999.0).tolist() == [[100.0]]
 
 
+def _read(arr, nodata=-9999.0):
+    return {"array": np.asarray(arr, dtype="float32"), "nodata": nodata}
+
+
+def _win(value, *, shape=(4, 4), nodata=-9999.0, holes=()):
+    """A synthetic ``_read_window_reprojected`` result (constant array on a valid transform)."""
+    from rasterio.transform import from_bounds
+
+    arr = np.full(shape, float(value), dtype="float32")
+    for (r, c) in holes:
+        arr[r, c] = nodata
+    return {
+        "array": arr,
+        "transform": from_bounds(0, 0, shape[1] * 10, shape[0] * 10, shape[1], shape[0]),
+        "crs": "EPSG:32617",
+        "nodata": nodata,
+        "gsd_m": 10.0,
+        "shape": list(shape),
+    }
+
+
+def test_composite_surface_lidar_over_dem_fills_holes():
+    """Lidar where present overrides; DEM fills the lidar holes; canopy augments DEM-only
+    pixels. Provenance codes: 3 lidar, 2 dem+canopy, 1 bare dem, 0 nodata."""
+    nd = -9999.0
+    dem = _read([[100.0, 100.0], [100.0, 100.0]])  # complete
+    lidar = _read([[150.0, nd], [nd, nd]])  # only the top-left pixel
+    canopy = _read([[5.0, 8.0], [nd, 3.0]])  # top-right + bottom-right have canopy
+    elev, prov = tools._composite_surface(
+        {"terrain": dem, "surface": lidar, "canopy": canopy}, nd
+    )
+    # top-left: lidar wins (150, code 3); top-right: dem+canopy (108, code 2);
+    # bottom-left: bare dem (100, code 1); bottom-right: dem+canopy (103, code 2)
+    assert elev.tolist() == [[150.0, 108.0], [100.0, 103.0]]
+    assert prov.tolist() == [[3, 2], [1, 2]]
+
+
+def test_composite_surface_dem_only_is_full_coverage():
+    nd = -9999.0
+    elev, prov = tools._composite_surface({"terrain": _read([[10.0, nd]])}, nd)
+    assert elev.tolist() == [[10.0, nd]]
+    assert prov.tolist() == [[1, 0]]  # dem_fill where valid, nodata where the dem had a hole
+
+
+def test_fetch_mosaic_fills_partial_lidar_to_full_coverage(redirect_ingestion, monkeypatch):
+    """A *partial* lidar DSM (most pixels nodata) + a complete DEM composites to ~full
+    coverage — the fix for spurious 'undetermined' — with a lidar/dem provenance mix."""
+    nd = -9999.0
+
+    def _fake_read(href, bbox, crs, gsd):
+        if "dem" in href or "terrain" in href:
+            return _win(100.0)  # complete DEM
+        # lidar: a 4x4 with only the top-left 2x2 valid (rest nodata)
+        holes = [(r, c) for r in range(4) for c in range(4) if not (r < 2 and c < 2)]
+        return _win(150.0, holes=holes)
+
+    monkeypatch.setattr(tools, "_sign_href", lambda h: h)
+    monkeypatch.setattr(tools, "_read_window_reprojected", _fake_read)
+
+    env, payload = _fetch(
+        {
+            "tile_id": "M1",
+            "bbox": [-80, 35, -79, 36],
+            "manifest": {"surface": "http://dsm", "dem": "http://dem"},
+        }
+    )
+    assert not env.get("is_error")
+    assert payload["surface_mode"] == "mosaic"
+    assert payload["coverage_flag"] == "ok"
+    assert payload["valid_fraction"] == pytest.approx(1.0)  # DEM filled every lidar hole
+    fr = payload["provenance_fractions"]
+    assert fr["lidar"] == pytest.approx(0.25)  # 4 of 16 pixels are lidar
+    assert fr["dem_fill"] == pytest.approx(0.75)
+
+
 def test_cache_key_stable_ignores_sas_token_but_tracks_inputs():
     base = ("32617_1_2", [-80, 35, -79, 36], {"terrain": "http://d?sas=AAA"})
     k1 = tools._cache_key(*base, "EPSG:32617", 10.0, "cover_proxy")
@@ -119,12 +194,38 @@ def test_resolve_target_crs_variants():
 
 
 def test_manifest_hrefs_normalises_aliases_and_dicts():
+    # A single href, a granule-mosaic list, and a {asset_href, vintage} dict all normalise to
+    # a ``hrefs`` list (one entry per granule) so fetch_aligned_surface can mosaic them.
     out = tools._manifest_hrefs(
-        {"dsm": "http://s", "dem": "http://d", "canopy": {"asset_href": "http://c", "vintage": "2020"}}
+        {
+            "dsm": "http://s",
+            "dem": ["http://d1", "http://d2"],
+            "canopy": {"asset_href": "http://c", "vintage": "2020"},
+        }
     )
-    assert out["surface"]["href"] == "http://s"
-    assert out["terrain"]["href"] == "http://d"
-    assert out["canopy"] == {"href": "http://c", "vintage": "2020"}
+    assert out["surface"]["hrefs"] == ["http://s"]
+    assert out["terrain"]["hrefs"] == ["http://d1", "http://d2"]
+    assert out["canopy"] == {"hrefs": ["http://c"], "vintage": "2020"}
+
+
+def test_read_window_mosaic_coalesces_granules(monkeypatch):
+    """Two partial granules (each covering a different half of the tile) coalesce to full
+    coverage — the granule-boundary fix. A one-href list is an unchanged passthrough."""
+    nd = -9999.0
+    # granule A covers the left column, granule B the right column; together they're complete.
+    gran = {
+        "http://A": _win(10.0, holes=[(r, c) for r in range(4) for c in range(4) if c >= 2]),
+        "http://B": _win(20.0, holes=[(r, c) for r in range(4) for c in range(4) if c < 2]),
+    }
+    monkeypatch.setattr(tools, "_read_window_reprojected", lambda h, *a: gran[h])
+
+    merged = tools._read_window_mosaic(["http://A", "http://B"], [-80, 35, -79, 36], "EPSG:32617", 10.0)
+    arr = merged["array"]
+    assert not (arr == nd).any()  # every hole filled
+    assert arr[0, 0] == 10.0 and arr[0, 3] == 20.0  # left from A, right from B (first-valid-wins)
+
+    passthrough = tools._read_window_mosaic(["http://A"], [-80, 35, -79, 36], "EPSG:32617", 10.0)
+    assert passthrough is gran["http://A"]
 
 
 def test_next_surface_mode_walks_hierarchy():
@@ -180,14 +281,18 @@ def test_fetch_pseudo_dsm_fuses_and_writes(redirect_ingestion, patch_reads):
     assert payload["surface_mode"] == "pseudo_dsm"
     assert payload["confidence"] == "medium"
     assert payload["coverage_flag"] == "ok"
-    assert payload["dem_uri"] is not None
+    assert payload["dem_uri"] is None  # no separate DEM file — provenance is band 2 now
+    assert payload["provenance_band"] == 2
     assert payload["crs"] == "EPSG:32617"
     assert patch_reads["n"] == 2  # one DEM read + one canopy read
 
     import rasterio
 
     with rasterio.open(payload["dsm_uri"]) as ds:
+        assert ds.count == 2  # band 1 elevation + band 2 provenance
         assert float(ds.read(1).mean()) == pytest.approx(108.0)  # 100 DEM + 8 canopy
+        assert set(np.unique(ds.read(2).astype(int))) == {2}  # all DEM+canopy provenance
+    assert payload["provenance_fractions"]["pseudo"] == pytest.approx(1.0)
 
 
 def test_fetch_idempotent_second_call_hits_cache(redirect_ingestion, patch_reads):

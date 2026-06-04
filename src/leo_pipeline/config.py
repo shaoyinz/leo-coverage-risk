@@ -150,10 +150,12 @@ class Ingestion:
     # higher cost; see docs/rationale.md `raster_resolution_m`.
     target_gsd_m: float = 10.0
     # Surface fallback hierarchy, best first (docs/rationale.md `surface_source_preference`,
-    # architecture §5 download-error row). A2 walks DOWN this on a read failure: a true
-    # lidar DSM is ideal, else fuse DEM + max(canopy, building) into a pseudo-DSM, else a
-    # coarse cover proxy with lowered confidence.
-    surface_modes: tuple[str, ...] = ("true_dsm", "pseudo_dsm", "cover_proxy")
+    # architecture §5 download-error row). A2 walks DOWN this on a read failure. ``mosaic`` is
+    # the best when the manifest carries BOTH a lidar DSM and a DEM: lidar where present, DEM
+    # filling the holes (per-pixel provenance band) so coverage is complete; else a single
+    # true lidar DSM, else DEM + max(canopy, building) fused into a pseudo-DSM, else a coarse
+    # DEM-only cover proxy with lowered confidence.
+    surface_modes: tuple[str, ...] = ("mosaic", "true_dsm", "pseudo_dsm", "cover_proxy")
     # Tile-keyed, content-addressed cache of aligned surfaces. Re-running a tile with
     # unchanged inputs is a no-op (architecture §4 idempotency → resume / cost control).
     cache_dir: Path = REPO_ROOT / "data" / "interim" / "surfaces"

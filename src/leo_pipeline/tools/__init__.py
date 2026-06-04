@@ -511,11 +511,13 @@ def _resolve_target_crs(target_crs: str | None, bbox: list[float]) -> str:
 
 
 def _manifest_hrefs(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Normalise the A1 ``manifest`` arg to ``factor -> {href, vintage}``.
+    """Normalise the A1 ``manifest`` arg to ``factor -> {hrefs, vintage}``.
 
-    Accepts either ``{factor: href}`` or ``{factor: {asset_href|href, vintage}}`` and the
-    common aliases (``surface``/``dsm``/``true_dsm`` for the lidar DSM, ``terrain``/``dem``
-    for the bare-earth DEM). Returns only the factors actually present.
+    Accepts either ``{factor: href}``, ``{factor: [href, ...]}`` (a granule mosaic for one
+    source), or ``{factor: {asset_href|href, vintage}}`` and the common aliases
+    (``surface``/``dsm``/``true_dsm`` for the lidar DSM, ``terrain``/``dem`` for the
+    bare-earth DEM). ``hrefs`` is always a list (one entry for a single granule, several when
+    a tile spans a granule boundary). Returns only the factors actually present.
     """
     aliases = {
         "surface": ("surface", "dsm", "true_dsm"),
@@ -523,6 +525,14 @@ def _manifest_hrefs(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
         "canopy": ("canopy",),
         "buildings": ("buildings",),
     }
+
+    def _as_list(h: Any) -> list[str]:
+        if h is None:
+            return []
+        if isinstance(h, (list, tuple)):
+            return [str(x) for x in h if x]
+        return [str(h)]
+
     out: dict[str, dict[str, Any]] = {}
     for factor, keys in aliases.items():
         for key in keys:
@@ -533,8 +543,9 @@ def _manifest_hrefs(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
                     vintage = val.get("vintage")
                 else:
                     href, vintage = val, None
-                if href:
-                    out[factor] = {"href": str(href), "vintage": vintage}
+                hrefs = _as_list(href)
+                if hrefs:
+                    out[factor] = {"hrefs": hrefs, "vintage": vintage}
                 break
     return out
 
@@ -557,11 +568,17 @@ def _cache_key(
     surface_mode: str,
 ) -> str:
     """Stable content hash of the fetch inputs (SAS tokens stripped) for idempotency."""
+    def _key_href(v: Any) -> Any:
+        # A factor's value may be a single href (str), a granule-mosaic list, or None.
+        if isinstance(v, (list, tuple)):
+            return [_strip_query(x) for x in v]
+        return _strip_query(v)
+
     payload = json.dumps(
         {
             "tile_id": tile_id,
             "bbox": [round(float(x), 6) for x in bbox],
-            "hrefs": {k: _strip_query(v) for k, v in sorted(hrefs.items())},
+            "hrefs": {k: _key_href(v) for k, v in sorted(hrefs.items())},
             "crs": str(dst_crs),
             "gsd_m": float(gsd_m),
             "surface_mode": surface_mode,
@@ -628,6 +645,37 @@ def _read_window_reprojected(
     }
 
 
+def _read_window_mosaic(
+    hrefs: list[str], bbox4326: list[float], dst_crs: str, dst_gsd_m: float
+) -> dict[str, Any]:
+    """Read several COG granules and coalesce them into one layer on the tile grid.
+
+    A single STAC item is one ~1° granule; a 5 km tile that straddles a granule boundary is
+    only partially covered by any one item, which is what leaves the DEM base full of holes
+    (→ spurious ``undetermined``). Reading **every** intersecting granule and filling each
+    other's nodata gaps restores full coverage. Each granule is reprojected onto the SAME
+    ``(bbox, crs, gsd)``-derived grid (via :func:`_read_window_reprojected`), so they overlay
+    pixel-for-pixel; granules are coalesced first-valid-wins (callers pass finest-resolution
+    first). A one-element list is just a passthrough, so single-granule sources are unchanged.
+    """
+    import numpy as np
+
+    base: dict[str, Any] | None = None
+    for href in hrefs:
+        layer = _read_window_reprojected(href, bbox4326, dst_crs, dst_gsd_m)
+        if base is None:
+            base = layer
+            continue
+        out = base["array"]
+        fill = layer["array"]
+        # Fill only where the accumulator is still nodata and this granule has a real value.
+        holes = (out == base["nodata"]) & (fill != layer["nodata"])
+        out[holes] = fill[holes]
+    if base is None:
+        raise ValueError("no hrefs to mosaic")
+    return base
+
+
 def _fuse_pseudo_dsm(
     dem: Any, canopy: Any, dem_nodata: float, canopy_nodata: float
 ) -> Any:
@@ -652,6 +700,71 @@ def _fuse_pseudo_dsm(
     return fused.astype("float32")
 
 
+def _composite_surface(
+    layers: dict[str, Any], nodata: float
+) -> tuple[Any, Any]:
+    """Best-available-per-pixel elevation + a per-pixel provenance band.
+
+    Builds one surface by layering the aligned reads, lowest-trust first so higher-trust data
+    overwrites it (architecture §5, surface fallback as a *mosaic* not a whole-tile choice):
+
+        bare DEM (code 1)  →  DEM + max(canopy, 0) (code 2)  →  lidar DSM (code 3)
+
+    DEM is globally complete, so the result has full coverage even where the lidar is patchy —
+    which is what stops a partial lidar tile from leaving ~half its points ``undetermined``.
+    Each input is ``{"array", "nodata"}`` (or absent). Returns ``(elev, provenance)`` aligned to
+    the same grid; ``provenance`` is 0 where no source had a value (genuinely no datum).
+    """
+    import numpy as np
+
+    dem = layers.get("terrain")
+    lidar = layers.get("surface")
+    canopy = layers.get("canopy")
+    ref = dem or lidar or canopy
+    shape = np.asarray(ref["array"]).shape
+    elev = np.full(shape, nodata, dtype="float32")
+    prov = np.zeros(shape, dtype="int16")
+
+    def _valid(layer: Any) -> tuple[Any, Any]:
+        arr = np.asarray(layer["array"], dtype="float32")
+        nd = float(layer.get("nodata", nodata))
+        return arr, np.isfinite(arr) & (arr != nd)
+
+    # 1) bare DEM (lowest trust, but complete coverage)
+    if dem is not None:
+        dem_arr, dem_ok = _valid(dem)
+        elev = np.where(dem_ok, dem_arr, elev)
+        prov = np.where(dem_ok, 1, prov)
+        # 2) DEM + canopy where both present → modelled surface
+        if canopy is not None:
+            can_arr, can_ok = _valid(canopy)
+            both = dem_ok & can_ok
+            elev = np.where(both, dem_arr + np.maximum(can_arr, 0.0), elev)
+            prov = np.where(both, 2, prov)
+    # 3) lidar DSM overrides wherever it has a real value (already carries canopy + buildings)
+    if lidar is not None:
+        li_arr, li_ok = _valid(lidar)
+        elev = np.where(li_ok, li_arr, elev)
+        prov = np.where(li_ok, 3, prov)
+
+    return elev.astype("float32"), prov
+
+
+def _provenance_fractions(prov: Any) -> dict[str, float]:
+    """Share of pixels from each source (for the sidecar / QA) — counts only real datum pixels."""
+    import numpy as np
+
+    prov = np.asarray(prov)
+    total = int((prov > 0).sum())
+    if total == 0:
+        return {"lidar": 0.0, "pseudo": 0.0, "dem_fill": 0.0}
+    return {
+        "lidar": round(float((prov == 3).sum()) / total, 4),
+        "pseudo": round(float((prov == 2).sum()) / total, 4),
+        "dem_fill": round(float((prov == 1).sum()) / total, 4),
+    }
+
+
 def _valid_fraction(array: Any, nodata: float) -> float:
     """Share of finite, non-nodata pixels — feeds coverage_flag / confidence."""
     import numpy as np
@@ -663,17 +776,27 @@ def _valid_fraction(array: Any, nodata: float) -> float:
     return float(mask.mean())
 
 
-def _write_cog(path: Path, array: Any, transform: Any, crs: str, nodata: float) -> None:
-    """Write a tiled, deflate-compressed single-band float32 GeoTIFF surface."""
+def _write_cog(
+    path: Path,
+    array: Any,
+    transform: Any,
+    crs: str,
+    nodata: float,
+    provenance: Any = None,
+) -> None:
+    """Write a tiled, deflate-compressed float32 GeoTIFF surface. Band 1 is elevation; when
+    ``provenance`` is given it is written as band 2 (per-pixel source code) so the analysis
+    sampler can read what data each point sat on without a second file."""
     import rasterio
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    count = 1 if provenance is None else 2
     with rasterio.open(
         path,
         "w",
         driver="GTiff",
         dtype="float32",
-        count=1,
+        count=count,
         height=array.shape[0],
         width=array.shape[1],
         crs=crs,
@@ -685,6 +808,9 @@ def _write_cog(path: Path, array: Any, transform: Any, crs: str, nodata: float) 
         compress="deflate",
     ) as dst:
         dst.write(array.astype("float32"), 1)
+        if provenance is not None:
+            dst.write(provenance.astype("float32"), 2)
+            dst.set_band_description(2, "provenance")
 
 
 def _coverage_and_confidence(surface_mode: str, valid_frac: float) -> tuple[str, str]:
@@ -701,7 +827,9 @@ def _coverage_and_confidence(surface_mode: str, valid_frac: float) -> tuple[str,
         coverage = "partial"
     else:
         coverage = "empty"
-    base = {"true_dsm": "high", "pseudo_dsm": "medium"}.get(surface_mode, "low")
+    # Tile-level summary only; the authoritative signal is the per-pixel provenance band, which
+    # A3 samples per point (a mosaic is mostly-complete DEM with lidar where available).
+    base = {"mosaic": "high", "true_dsm": "high", "pseudo_dsm": "medium"}.get(surface_mode, "low")
     if coverage != "ok":
         base = {"high": "medium", "medium": "low"}.get(base, "low")
     return coverage, base
@@ -761,9 +889,14 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
     dem = layers.get("terrain")
     canopy = layers.get("canopy")
 
-    # Auto-pick the best mode the manifest can actually support, if not told one.
+    # Auto-pick the best mode the manifest can actually support, if not told one. ``mosaic`` is
+    # the new best: lidar over a DEM base so coverage is complete (no partial-lidar holes →
+    # no spurious ``undetermined`` downstream). The single-source modes remain for when the
+    # manifest carries only one of the two.
     if requested_mode:
         surface_mode = requested_mode
+    elif dsm and dem:
+        surface_mode = "mosaic"
     elif dsm:
         surface_mode = "true_dsm"
     elif dem and canopy:
@@ -778,6 +911,7 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
 
     # Confirm the chosen mode has its required layers; if not, point at the next fallback.
     need = {
+        "mosaic": ["surface", "terrain"],
         "true_dsm": ["surface"],
         "pseudo_dsm": ["terrain", "canopy"],
         "cover_proxy": ["terrain"],
@@ -794,9 +928,9 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
     target_crs = _resolve_target_crs(args.get("target_crs"), bbox)
 
     href_map = {
-        "surface": dsm["href"] if dsm else None,
-        "terrain": dem["href"] if dem else None,
-        "canopy": canopy["href"] if canopy else None,
+        "surface": dsm["hrefs"] if dsm else None,
+        "terrain": dem["hrefs"] if dem else None,
+        "canopy": canopy["hrefs"] if canopy else None,
     }
     key = _cache_key(tile_id, bbox, href_map, target_crs, target_gsd_m, surface_mode)
     cache_dir = INGESTION.cache_dir
@@ -814,33 +948,18 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
 
     vintage_map = {f: layers[f].get("vintage") for f in need}
 
+    # Read every layer the mode draws on (mosaic uses canopy too when the manifest carries it),
+    # all onto the same (bbox, crs, gsd)-derived grid so they composite pixel-for-pixel.
+    read_factors = list(need)
+    if surface_mode == "mosaic" and "canopy" in layers:
+        read_factors.append("canopy")
     try:
-        if surface_mode == "true_dsm":
-            read = _read_window_reprojected(
-                _sign_href(href_map["surface"]), bbox, target_crs, target_gsd_m
+        reads = {
+            f: _read_window_mosaic(
+                [_sign_href(h) for h in layers[f]["hrefs"]], bbox, target_crs, target_gsd_m
             )
-            dsm_arr, nodata = read["array"], read["nodata"]
-            transform = read["transform"]
-            dem_uri = None
-        elif surface_mode == "pseudo_dsm":
-            dem_read = _read_window_reprojected(
-                _sign_href(href_map["terrain"]), bbox, target_crs, target_gsd_m
-            )
-            canopy_read = _read_window_reprojected(
-                _sign_href(href_map["canopy"]), bbox, target_crs, target_gsd_m
-            )
-            nodata = dem_read["nodata"]
-            transform = dem_read["transform"]
-            dsm_arr = _fuse_pseudo_dsm(
-                dem_read["array"], canopy_read["array"], nodata, canopy_read["nodata"]
-            )
-        else:  # cover_proxy: DEM-only surface, no canopy/building term, low confidence
-            dem_read = _read_window_reprojected(
-                _sign_href(href_map["terrain"]), bbox, target_crs, target_gsd_m
-            )
-            dsm_arr, nodata = dem_read["array"], dem_read["nodata"]
-            transform = dem_read["transform"]
-            dem_uri = None
+            for f in read_factors
+        }
     except Exception as exc:
         nxt = _next_surface_mode(surface_mode)
         hint = f" Retry with surface_mode={nxt!r}." if nxt else ""
@@ -849,24 +968,26 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
             f"{exc}.{hint}"
         )
 
+    ref = reads.get("terrain") or reads.get("surface") or reads.get("canopy")
+    nodata = ref["nodata"]
+    transform = ref["transform"]
+    dsm_arr, provenance = _composite_surface(reads, nodata)
+
     valid_frac = _valid_fraction(dsm_arr, nodata)
     coverage_flag, confidence = _coverage_and_confidence(surface_mode, valid_frac)
 
     dsm_path = Path(str(base) + "_dsm.tif")
-    _write_cog(dsm_path, dsm_arr, transform, target_crs, nodata)
-    dem_uri = None
-    if surface_mode == "pseudo_dsm":
-        dem_path = Path(str(base) + "_dem.tif")
-        _write_cog(dem_path, dem_read["array"], transform, target_crs, nodata)
-        dem_uri = str(dem_path)
+    _write_cog(dsm_path, dsm_arr, transform, target_crs, nodata, provenance=provenance)
 
     payload = {
         "tile_id": tile_id,
         "dsm_uri": str(dsm_path),
-        "dem_uri": dem_uri,
+        "dem_uri": None,
         "crs": target_crs,
         "gsd_m": target_gsd_m,
         "surface_mode": surface_mode,
+        "provenance_band": 2,
+        "provenance_fractions": _provenance_fractions(provenance),
         "vintage_map": vintage_map,
         "coverage_flag": coverage_flag,
         "confidence": confidence,
@@ -954,6 +1075,38 @@ async def stac_item_read(args: dict[str, Any]) -> dict[str, Any]:
             "signed": bool(sign),
         }
     )
+
+
+def _search_item_hrefs(
+    collection: str,
+    bbox: list[float],
+    catalog: str = "planetary_computer",
+    max_items: int = 20,
+) -> list[str]:
+    """Resolve **every** intersecting granule's (UNSIGNED) asset href for a collection+tile.
+
+    ``stac_item_read`` returns the single best item; this returns all of them, finest
+    resolution first, so ``fetch_aligned_surface`` can mosaic a tile that spans a granule
+    boundary (the deterministic A2 path's granule-mosaic input — see ``leo_pipeline.offline``).
+    Hrefs are returned unsigned; signing happens at download time inside the fetch tool.
+    """
+    catalog_url = DISCOVERY.stac_catalogs.get(catalog, catalog)
+    from pystac_client import Client
+
+    client = Client.open(catalog_url)
+    items = list(client.search(collections=[collection], bbox=bbox, max_items=max_items).items())
+
+    def _sort_key(it: Any) -> tuple[float, str]:
+        summ = _summarize_stac_item(it)
+        gsd = summ.get("gsd_m")
+        return (gsd if gsd is not None else 1e9, summ.get("datetime") or "")
+
+    hrefs: list[str] = []
+    for it in sorted(items, key=_sort_key):
+        href = _summarize_stac_item(it).get("asset_href")
+        if href and href not in hrefs:
+            hrefs.append(href)
+    return hrefs
 
 
 @tool(
