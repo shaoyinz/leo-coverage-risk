@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><title>LEO coverage-risk map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
+<style>
+  html,body,#map{margin:0;height:100%;width:100%}
+  .panel{position:absolute;top:10px;left:10px;background:#fff;padding:8px 10px;
+    font:13px/1.4 sans-serif;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.3);min-width:170px}
+  .panel b{display:block;margin-bottom:6px}
+  .panel label{display:block;color:#555;font-size:11px;margin:6px 0 2px}
+  .panel select{width:100%;font:12px sans-serif;padding:2px}
+  .legend{position:absolute;bottom:18px;left:10px;background:#fff;padding:8px 10px;
+    font:13px/1.4 sans-serif;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .legend b{display:block;margin-bottom:4px}
+  .legend .row{cursor:pointer;user-select:none;display:flex;align-items:center;padding:1px 0}
+  .legend .row span{display:inline-block;width:12px;height:12px;margin-right:6px;border-radius:50%;vertical-align:middle}
+  .legend .row.off{opacity:.4}
+  .legend .row.off span{box-shadow:inset 0 0 0 2px #fff}
+  .legend .hint{margin-top:5px;color:#666;font-size:11px}
+</style></head><body>
+<div id="map"></div>
+<div class="panel"><b>Filters</b>
+  <label for="stateSel">State</label>
+  <select id="stateSel"><option value="">All states</option><option value="37">North Carolina</option></select>
+  <label for="countySel">County</label>
+  <select id="countySel"><option value="">All counties</option><option value="37001" data-state="37">Alamance (37001)</option><option value="37003" data-state="37">Alexander (37003)</option><option value="37005" data-state="37">Alleghany (37005)</option><option value="37007" data-state="37">Anson (37007)</option><option value="37009" data-state="37">Ashe (37009)</option><option value="37011" data-state="37">Avery (37011)</option><option value="37013" data-state="37">Beaufort (37013)</option><option value="37015" data-state="37">Bertie (37015)</option><option value="37017" data-state="37">Bladen (37017)</option><option value="37019" data-state="37">Brunswick (37019)</option><option value="37021" data-state="37">Buncombe (37021)</option><option value="37023" data-state="37">Burke (37023)</option><option value="37025" data-state="37">Cabarrus (37025)</option><option value="37027" data-state="37">Caldwell (37027)</option><option value="37029" data-state="37">Camden (37029)</option><option value="37031" data-state="37">Carteret (37031)</option><option value="37033" data-state="37">Caswell (37033)</option><option value="37035" data-state="37">Catawba (37035)</option><option value="37037" data-state="37">Chatham (37037)</option><option value="37039" data-state="37">Cherokee (37039)</option><option value="37041" data-state="37">Chowan (37041)</option><option value="37043" data-state="37">Clay (37043)</option><option value="37045" data-state="37">Cleveland (37045)</option><option value="37047" data-state="37">Columbus (37047)</option><option value="37049" data-state="37">Craven (37049)</option><option value="37051" data-state="37">Cumberland (37051)</option><option value="37053" data-state="37">Currituck (37053)</option><option value="37055" data-state="37">Dare (37055)</option><option value="37057" data-state="37">Davidson (37057)</option><option value="37059" data-state="37">Davie (37059)</option><option value="37061" data-state="37">Duplin (37061)</option><option value="37063" data-state="37">Durham (37063)</option><option value="37065" data-state="37">Edgecombe (37065)</option><option value="37067" data-state="37">Forsyth (37067)</option><option value="37069" data-state="37">Franklin (37069)</option><option value="37071" data-state="37">Gaston (37071)</option><option value="37073" data-state="37">Gates (37073)</option><option value="37075" data-state="37">Graham (37075)</option><option value="37077" data-state="37">Granville (37077)</option><option value="37079" data-state="37">Greene (37079)</option><option value="37081" data-state="37">Guilford (37081)</option><option value="37083" data-state="37">Halifax (37083)</option><option value="37085" data-state="37">Harnett (37085)</option><option value="37087" data-state="37">Haywood (37087)</option><option value="37089" data-state="37">Henderson (37089)</option><option value="37091" data-state="37">Hertford (37091)</option><option value="37093" data-state="37">Hoke (37093)</option><option value="37095" data-state="37">Hyde (37095)</option><option value="37097" data-state="37">Iredell (37097)</option><option value="37099" data-state="37">Jackson (37099)</option><option value="37101" data-state="37">Johnston (37101)</option><option value="37103" data-state="37">Jones (37103)</option><option value="37105" data-state="37">Lee (37105)</option><option value="37107" data-state="37">Lenoir (37107)</option><option value="37109" data-state="37">Lincoln (37109)</option><option value="37113" data-state="37">Macon (37113)</option><option value="37115" data-state="37">Madison (37115)</option><option value="37117" data-state="37">Martin (37117)</option><option value="37111" data-state="37">McDowell (37111)</option><option value="37119" data-state="37">Mecklenburg (37119)</option><option value="37121" data-state="37">Mitchell (37121)</option><option value="37123" data-state="37">Montgomery (37123)</option><option value="37125" data-state="37">Moore (37125)</option><option value="37127" data-state="37">Nash (37127)</option><option value="37129" data-state="37">New Hanover (37129)</option><option value="37131" data-state="37">Northampton (37131)</option><option value="37133" data-state="37">Onslow (37133)</option><option value="37135" data-state="37">Orange (37135)</option><option value="37137" data-state="37">Pamlico (37137)</option><option value="37139" data-state="37">Pasquotank (37139)</option><option value="37141" data-state="37">Pender (37141)</option><option value="37143" data-state="37">Perquimans (37143)</option><option value="37145" data-state="37">Person (37145)</option><option value="37147" data-state="37">Pitt (37147)</option><option value="37149" data-state="37">Polk (37149)</option><option value="37151" data-state="37">Randolph (37151)</option><option value="37153" data-state="37">Richmond (37153)</option><option value="37155" data-state="37">Robeson (37155)</option><option value="37157" data-state="37">Rockingham (37157)</option><option value="37159" data-state="37">Rowan (37159)</option><option value="37161" data-state="37">Rutherford (37161)</option><option value="37163" data-state="37">Sampson (37163)</option><option value="37165" data-state="37">Scotland (37165)</option><option value="37167" data-state="37">Stanly (37167)</option><option value="37169" data-state="37">Stokes (37169)</option><option value="37171" data-state="37">Surry (37171)</option><option value="37173" data-state="37">Swain (37173)</option><option value="37175" data-state="37">Transylvania (37175)</option><option value="37177" data-state="37">Tyrrell (37177)</option><option value="37179" data-state="37">Union (37179)</option><option value="37181" data-state="37">Vance (37181)</option><option value="37183" data-state="37">Wake (37183)</option><option value="37185" data-state="37">Warren (37185)</option><option value="37187" data-state="37">Washington (37187)</option><option value="37189" data-state="37">Watauga (37189)</option><option value="37191" data-state="37">Wayne (37191)</option><option value="37193" data-state="37">Wilkes (37193)</option><option value="37195" data-state="37">Wilson (37195)</option><option value="37197" data-state="37">Yadkin (37197)</option><option value="37199" data-state="37">Yancey (37199)</option></select>
+</div>
+<div class="legend"><b>LEO coverage-risk map</b><div class="row" data-tier="clear"><span style="background:#1a9850"></span>clear</div><div class="row" data-tier="at_risk"><span style="background:#fdae61"></span>at_risk</div><div class="row" data-tier="severe"><span style="background:#d73027"></span>severe</div><div class="row" data-tier="undetermined"><span style="background:#999999"></span>undetermined</div>
+  <div class="hint">click a tier to toggle</div>
+</div>
+<script>
+  let protocol = new pmtiles.Protocol();
+  maplibregl.addProtocol("pmtiles", protocol.tile);
+  const map = new maplibregl.Map({
+    container: "map",
+    style: { version: 8,
+      sources: {
+        sat: { type: "raster",
+          tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+          tileSize: 256, maxzoom: 19,
+          attribution: "Imagery © Esri, Maxar, Earthstar Geographics" },
+        dem: { type: "raster-dem",
+          tiles: ["https://elevation-tiles-prod.s3.amazonaws.com/terrarium/{z}/{x}/{y}.png"],
+          tileSize: 256, maxzoom: 14, encoding: "terrarium",
+          attribution: "Elevation: Mapzen / AWS Terrain Tiles" }
+      },
+      layers: [
+        { id: "sat", type: "raster", source: "sat" },
+        { id: "hillshade", type: "hillshade", source: "dem",
+          paint: { "hillshade-exaggeration": 0.4 } }
+      ] },
+    center: [-79.89052, 35.21504], zoom: 5.35, pitch: 55, maxPitch: 80
+  });
+  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+
+  map.on("load", () => {
+    map.setTerrain({ source: "dem", exaggeration: 1.4 });
+    map.setSky({
+      "sky-color": "#88b8e8", "sky-horizon-blend": 0.5,
+      "horizon-color": "#dfeefc", "horizon-fog-blend": 0.6,
+      "fog-color": "#e8eef4", "fog-ground-blend": 0.4
+    });
+
+    map.addSource("loc", { type: "vector", url: "pmtiles://./locations.pmtiles" });
+    map.addLayer({ id: "loc", type: "circle", source: "loc",
+      "source-layer": "locations",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 1.5, 12, 5],
+        "circle-color": ["match", ["get", "risk_tier"], "clear", "#1a9850", "at_risk", "#fdae61", "severe", "#d73027", "undetermined", "#999999", "#888888"],
+        "circle-opacity": 0.85, "circle-stroke-width": 0.3, "circle-stroke-color": "#333"
+      } });
+
+    // Combined filter: active risk tiers (legend toggles) AND the state/county dropdowns.
+    const active = new Set(["clear", "at_risk", "severe", "undetermined"]);
+    const stateSel = document.getElementById("stateSel");
+    const countySel = document.getElementById("countySel");
+    const allCountyOptions = Array.from(countySel.options).map((o) => o.cloneNode(true));
+    const applyFilter = () => {
+      const preds = [["in", ["get", "risk_tier"], ["literal", [...active]]]];
+      if (stateSel.value) preds.push(["==", ["get", "state"], stateSel.value]);
+      if (countySel.value) preds.push(["==", ["get", "county"], countySel.value]);
+      map.setFilter("loc", ["all", ...preds]);
+    };
+
+    document.querySelectorAll(".legend .row").forEach((row) => {
+      row.addEventListener("click", () => {
+        const t = row.dataset.tier;
+        if (active.has(t)) { active.delete(t); row.classList.add("off"); }
+        else { active.add(t); row.classList.remove("off"); }
+        applyFilter();
+      });
+    });
+
+    // Cascade: narrow the county list to the chosen state (reset to All on change).
+    const repopulateCounties = () => {
+      const st = stateSel.value;
+      countySel.innerHTML = "";
+      allCountyOptions.forEach((o) => {
+        if (!o.value || !st || o.dataset.state === st) countySel.appendChild(o.cloneNode(true));
+      });
+      countySel.value = "";
+    };
+    stateSel.addEventListener("change", () => { repopulateCounties(); applyFilter(); });
+    countySel.addEventListener("change", applyFilter);
+
+    map.on("click", "loc", (e) => {
+      const p = e.features[0].properties;
+      new maplibregl.Popup().setLngLat(e.lngLat)
+        .setHTML("<b>" + p.location_id + "</b><br>tier: " + p.risk_tier +
+                 "<br>obstruction: " + p.obstruction_pct + "%<br>confidence: " + p.confidence)
+        .addTo(map);
+    });
+    map.on("mouseenter", "loc", () => map.getCanvas().style.cursor = "pointer");
+    map.on("mouseleave", "loc", () => map.getCanvas().style.cursor = "");
+  });
+</script></body></html>

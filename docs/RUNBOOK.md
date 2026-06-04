@@ -26,7 +26,9 @@ State flows between stages on disk:
 - `data/interim/surfaces/` — A2's content-addressed, idempotent surface cache.
 - `data/interim/analysis/findings_<tile>.json` — A3 output, read by A4 and A5.
 - `data/interim/qa/qa_report.json` — A4 output, folded into A5's decision log.
-- `outputs/` — A5 deliverables (gitignored; regenerate any time).
+- `outputs/` — A5 deliverables. The small reviewer-facing results are committed
+  (`decision_log.md`, `aggregates.json`, `coverage_map.png/.html`, `locations.pmtiles`); the
+  1GB `locations.geojson` + run logs stay gitignored. Regenerate any time via `leo-report --compute`.
 
 ## Deterministic end-to-end (no API key)
 

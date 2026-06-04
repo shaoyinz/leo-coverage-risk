@@ -23,9 +23,16 @@ data/raw/*
 data/interim/*
 !data/interim/.gitkeep
 
-# Outputs — generated maps / figures
+# Outputs — generated maps / figures.
+# The large source artifacts (locations.geojson ~1GB, run logs) stay ignored; the small,
+# reviewer-facing result files below ARE committed so the findings + map read from a clone.
 outputs/*
 !outputs/.gitkeep
+!outputs/decision_log.md
+!outputs/aggregates.json
+!outputs/coverage_map.png
+!outputs/coverage_map.html
+!outputs/locations.pmtiles
 
 # Notebooks
 .ipynb_checkpoints/

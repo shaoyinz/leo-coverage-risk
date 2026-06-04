@@ -27,6 +27,37 @@ agentic path, not just the deterministic engine, is now verified end-to-end. Rem
 the documented in-role deferrals (A2 buildings/cover-proxy, A3 σ_H/TLE weighting), not missing
 roles. See the [decision log](#decision-log).
 
+## Insights
+
+A full-dataset run (all **4,514,477** unique coordinates behind the 4.67M funded locations,
+North Carolina) scored:
+
+| Risk tier | Locations | Share |
+|-----------|----------:|------:|
+| 🟢 clear | 4,482,265 | 99.3% |
+| 🟡 at-risk (marginal) | 30,341 | 0.7% |
+| 🔴 severe | 1,871 | 0.0% |
+| ⚪ undetermined | 0 | 0.0% |
+
+Household-weighted, **~0.7%** of North Carolina locations (≈32.8K households) are at-risk.
+The risk concentrates in the western Blue Ridge terrain and dense-canopy counties — the
+priority county is **Mecklenburg (FIPS 37119, ~8.3K at-risk households)**, with the highest
+*rate* in smaller mountain counties (e.g. 37115 at 5.4%).
+
+![Coverage-risk map](outputs/coverage_map.png)
+
+**Read it as a prioritised verify-on-site list, not a service guarantee** — 42.8% of scores
+are low-confidence (DEM-fill / pseudo-DSM surfaces dominate) and the 🟡/🔴 cut-points are
+calibration defaults that should be tuned against the Starlink app on a labelled sample first.
+
+- Officer-facing summary: [`outputs/decision_log.md`](outputs/decision_log.md)
+- County + state rollups (JSON): [`outputs/aggregates.json`](outputs/aggregates.json)
+- Interactive map: [`outputs/coverage_map.html`](outputs/coverage_map.html) (MapLibre +
+  `outputs/locations.pmtiles`; serve the `outputs/` folder over a static server — e.g.
+  `python -m http.server` — then open it; the PNG above is the zero-setup offline view)
+
+Regenerate with `leo-report --compute` (or `scripts/make_static_map.py` for the PNG).
+
 ## Layout
 
 ```
@@ -43,11 +74,14 @@ src/leo_pipeline/
   agents/          data-discovery (A1) · ingestion (A2) · geo-analysis (A3) · qa (A4) · reporting (A5) (least-privilege)
   tools/           @tool defs + in-process SDK MCP server ("leo")
   state/           PipelineState (+ SurfaceTile, ObstructionResult, QAAnomaly, ReportArtifact) threaded between agents
+  run_full.py / offline.py   no-API full-dataset + sync-surface drivers (fan A2+A3 over all tiles)
 notebooks/   00_data_inspection.ipynb — first-pass CSV profiling
+scripts/     run_e2e_offline.py (single-tile A1–A5) · make_static_map.py (the Insights PNG)
 data/raw/    provided locations.csv (gitignored; supplied by the challenge)
 data/interim/  de-dup work list, tiles, data_manifest.json, surfaces/ cache, analysis/ findings, qa/ reports (gitignored)
 resources/   Starlink Install Guide PDF (supplied by the challenge)
-outputs/     generated maps / figures (gitignored)
+outputs/     committed results: decision_log.md, aggregates.json, coverage_map.png/.html, locations.pmtiles
+             (the 1GB locations.geojson + run logs stay gitignored — regenerate via leo-report --compute)
 ```
 
 ## Setup
@@ -141,7 +175,8 @@ LEO_RUN_LIVE=1 ../../.venv/bin/python -m pytest -m live -k ingestion   # real DE
 | Search / download agents (live) | A1 `data-discovery` (`stac_search`) + A2 `ingestion` (`stac_item_read`/`fetch_aligned_surface`/`cache_rw`), `src/leo_pipeline/` |
 | Validation / QA (live) | A4 `qa` agent + `qa_input_audit`/`qa_location_batch` (`src/leo_pipeline/qa.py`, `config.QA`) |
 | Reporting / insight (live) | A5 `reporting` agent + `aggregate_findings`/`render_map`/`write_report` (`src/leo_pipeline/report.py`, `config.Reporting`) |
-| Bonus: interactive map | A5 `render_map` → PMTiles (`tippecanoe`) + MapLibre HTML in `outputs/`; run `leo-report --compute` |
+| Insights & findings | [`## Insights`](#insights) above · `outputs/decision_log.md` · `outputs/aggregates.json` · static `outputs/coverage_map.png` |
+| Bonus: interactive map | `outputs/coverage_map.html` + `outputs/locations.pmtiles` (committed); A5 `render_map` → PMTiles (`tippecanoe`) + MapLibre; regen via `leo-report --compute` |
 | AI-tool disclosure | `AI_TOOLS.md` |
 
 ## Decision log
