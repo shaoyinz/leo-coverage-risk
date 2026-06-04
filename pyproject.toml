@@ -52,6 +52,7 @@ leo-ingestion = "leo_pipeline.run_ingestion:main"   # A2: aligned per-tile surfa
 leo-analysis = "leo_pipeline.run_analysis:main"     # A3: per-location obstruction scores
 leo-qa = "leo_pipeline.run_qa:main"                 # A4: input audit + output-anomaly QA
 leo-report = "leo_pipeline.run_report:main"         # A5: aggregates + interactive map + decision log
+leo-full = "leo_pipeline.run_full:main"             # full no-API run: A2+A3 over every tile, in parallel
 
 [tool.setuptools.packages.find]
 where = ["src"]
