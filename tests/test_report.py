@@ -81,6 +81,14 @@ def test_findings_to_geojson_skips_unplaceable():
     assert gj["features"] == []
 
 
+def test_findings_to_geojson_includes_county_and_state():
+    findings = [_f(0, "severe", 40.0, lon=-80.0, lat=35.0)]
+    gj = report.findings_to_geojson(findings, county_of={"coord_0": "37119"})
+    props = gj["features"][0]["properties"]
+    assert props["county"] == "37119"
+    assert props["state"] == "37"  # state = county FIPS[:2]
+
+
 # --- MapLibre HTML (pure string) -----------------------------------------------------
 
 
@@ -89,8 +97,24 @@ def test_maplibre_html_references_pmtiles_layer_and_colors():
     assert "pmtiles://./locations.pmtiles" in html
     assert f'"source-layer": "{REPORTING.map_layer_name}"' in html
     assert REPORTING.tier_colors["severe"] in html  # the risk-tier match expression
-    assert REPORTING.map_basemap_url in html
+    assert "World_Imagery" in html  # satellite basemap
+    assert "raster-dem" in html  # DEM terrain / hillshade overlay
     assert "[-80.0, 35.0]" in html  # initial center
+
+
+def test_maplibre_html_renders_state_and_county_filters():
+    aggregates = {
+        "states": [{"region": "37", "state_name": "North Carolina"}],
+        "counties": [{"region": "37119"}],
+    }
+    html = report.maplibre_html(
+        "locations.pmtiles", center=[-80.0, 35.0], zoom=8.0, aggregates=aggregates
+    )
+    assert 'id="stateSel"' in html and 'id="countySel"' in html
+    assert "North Carolina" in html  # state option
+    assert 'data-state="37"' in html  # county option carries its state for cascading
+    assert "Mecklenburg (37119)" in html  # FIPS-labelled county option
+    assert '["all", ...preds]' in html  # combined tier + state + county filter
 
 
 # --- decision log --------------------------------------------------------------------

@@ -129,6 +129,63 @@ def test_compute_path_writes_findings_offline(tmp_path, monkeypatch):
     assert written[0]["location_id"] == "adhoc_point"
 
 
+def test_tile_id_recovered_from_surface_uri():
+    assert ra._tile_id_from_uri("/c/32617_158_806__c84a0b92_dsm.tif") == "32617_158_806"
+    # ad-hoc surface with no "__" separator falls back to the file stem
+    assert ra._tile_id_from_uri("/tmp/s.tif") == "s"
+
+
+def test_findings_from_payloads_merges_subcalls_and_keeps_baseline_height():
+    """Agentic capture: a tile split across sub-calls is unioned by location_id, and a
+    raised-mount re-score must NOT overwrite the as-installed (lowest dish-height) verdict."""
+    dsm = "/cache/32617_158_806__abc_dsm.tif"
+    payloads = [
+        # sub-call 1 of the 2.0 m first pass
+        {"dsm_uri": dsm, "spec_version": "spec-x", "results": [
+            {"location_id": "coord_1", "obstruction_pct": 0.0, "risk_tier": "clear",
+             "confidence": "high", "dish_height_m": 2.0, "blocked_azimuths": [],
+             "surface_provenance": "lidar"},
+            {"location_id": "coord_2", "obstruction_pct": 12.0, "risk_tier": "at_risk",
+             "confidence": "high", "dish_height_m": 2.0, "blocked_azimuths": [10],
+             "surface_provenance": "lidar"},
+        ]},
+        # sub-call 2 of the same first pass (different points, same tile)
+        {"dsm_uri": dsm, "spec_version": "spec-x", "results": [
+            {"location_id": "coord_3", "obstruction_pct": 0.5, "risk_tier": "clear",
+             "confidence": "medium", "dish_height_m": 2.0, "blocked_azimuths": [],
+             "surface_provenance": "dem_fill"},
+        ]},
+        # raised-height re-score of the flagged point — advisory, must not clobber baseline
+        {"dsm_uri": dsm, "spec_version": "spec-x", "results": [
+            {"location_id": "coord_2", "obstruction_pct": 0.0, "risk_tier": "clear",
+             "confidence": "high", "dish_height_m": 4.0, "blocked_azimuths": [],
+             "surface_provenance": "lidar"},
+        ]},
+    ]
+    rows = {r["location_id"]: r for r in ra.findings_from_payloads(payloads)}
+    assert set(rows) == {"coord_1", "coord_2", "coord_3"}
+    # coord_2 keeps the 2.0 m at_risk baseline, not the 4.0 m clear re-score
+    assert rows["coord_2"]["dish_height_m"] == 2.0
+    assert rows["coord_2"]["risk_tier"] == "at_risk"
+    assert all(r["tile_id"] == "32617_158_806" for r in rows.values())
+
+
+def test_write_findings_groups_by_tile(tmp_path, monkeypatch):
+    import leo_pipeline.config as cfg
+
+    findings_dir = tmp_path / "analysis"
+    monkeypatch.setattr(ra, "ANALYSIS", cfg.Analysis(findings_dir=findings_dir))
+    rows = [
+        {"location_id": "coord_1", "tile_id": "T_A", "risk_tier": "clear"},
+        {"location_id": "coord_2", "tile_id": "T_A", "risk_tier": "at_risk"},
+        {"location_id": "coord_9", "tile_id": "T_B", "risk_tier": "clear"},
+    ]
+    by_tile = ra.write_findings(rows)
+    assert set(by_tile) == {"T_A", "T_B"}
+    assert len(json.loads((findings_dir / "findings_T_A.json").read_text())) == 2
+    assert len(json.loads((findings_dir / "findings_T_B.json").read_text())) == 1
+
+
 def test_theta_override_threads_into_sky_spec(tmp_path):
     path = write_surface(tmp_path / "s.tif", _flat())
     lon, lat = _center_lonlat(path)

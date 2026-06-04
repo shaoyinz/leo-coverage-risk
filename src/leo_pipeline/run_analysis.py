@@ -10,7 +10,11 @@ parameters (mount-height sweep, edge handling); the per-azimuth horizon math is 
 Two paths:
 
 - default (agentic): drive A3 — it batches each tile's points through compute_sky_obstruction
-  and reasons about edges/mount height. Needs ANTHROPIC_API_KEY.
+  and reasons about edges/mount height. Needs ANTHROPIC_API_KEY. The driver captures the
+  ``compute_sky_obstruction`` tool-result payloads off the agent stream and persists them as
+  the canonical per-tile findings JSON (the same schema/store as ``--compute``), so the agent's
+  own scoring is what A4/A5 consume. Sub-calls for one tile are merged by location; a raised
+  mount-height re-score never overwrites the as-installed (lowest dish-height) baseline tier.
 - ``--compute``: run the SAME deterministic horizon engine directly (no agent, no API),
   writing a per-tile findings JSON and a tier summary. The offline/verification path.
 
@@ -310,7 +314,48 @@ def _build_query(info: dict) -> str:
     return "\n".join(lines)
 
 
-def _render(message) -> None:
+def _result_payload(block) -> dict | None:
+    """Parse a ToolResultBlock's content (a list of text parts, or a raw string) back into the
+    JSON dict the leo tool returned, or None if it isn't JSON."""
+    content = getattr(block, "content", None)
+    if isinstance(content, list):
+        content = "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part) for part in content
+        )
+    if not isinstance(content, str) or not content.strip():
+        return None
+    try:
+        payload = json.loads(content)
+    except (ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _render(message, tool_names: dict[str, str], payloads: list[dict]) -> tuple[None, None]:
+    """Stream-side handler: echo tool calls / text (verbose) AND capture every
+    compute_sky_obstruction result so the agent's scoring can be persisted as findings.
+
+    ``tool_names`` maps tool_use_id -> tool name (learned from ToolUseBlocks) so a result block
+    can be attributed to the tool that produced it; matching compute_sky_obstruction payloads
+    (those carrying a ``results`` list) are appended to ``payloads``.
+    """
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return None, None
+    for block in content:
+        name = getattr(block, "name", None)
+        bid = getattr(block, "id", None)
+        if name and bid:
+            tool_names[bid] = name
+        tuid = getattr(block, "tool_use_id", None)
+        if tuid is not None and tool_names.get(tuid, "").endswith("compute_sky_obstruction"):
+            payload = _result_payload(block)
+            if payload and isinstance(payload.get("results"), list):
+                payloads.append(payload)
+    return None, None
+
+
+def _print_blocks(message) -> None:
     content = getattr(message, "content", None)
     if not isinstance(content, list):
         return
@@ -323,14 +368,75 @@ def _render(message) -> None:
             print(text)
 
 
-async def _run(options, query: str, verbose: bool) -> None:
+def _tile_id_from_uri(dsm_uri: str) -> str:
+    """A2 caches surfaces as ``{tile_id}__{key}_dsm.tif``; recover the tile_id (or the stem
+    for an ad-hoc surface with no ``__`` separator)."""
+    stem = Path(dsm_uri).name
+    return stem.split("__", 1)[0] if "__" in stem else Path(dsm_uri).stem
+
+
+def findings_from_payloads(payloads: list[dict]) -> list[dict]:
+    """Fold the captured compute_sky_obstruction payloads into per-location findings rows
+    (the same schema compute_findings writes). Merges a tile's sub-calls by location_id and,
+    when a location was scored at several mount heights, keeps the *lowest* dish-height row —
+    the as-installed baseline verdict — so a raised-height 'clear if raised' re-score never
+    overwrites it."""
+    best: dict[str, dict] = {}
+    for pl in payloads:
+        dsm_uri = pl.get("dsm_uri") or ""
+        tile_id = _tile_id_from_uri(dsm_uri) if dsm_uri else "unknown"
+        spec_version = pl.get("spec_version")
+        for r in pl.get("results", []):
+            lid = r.get("location_id")
+            if lid is None:
+                continue
+            row = {
+                "location_id": lid,
+                "tile_id": tile_id,
+                "obstruction_pct": r.get("obstruction_pct"),
+                "risk_tier": r.get("risk_tier"),
+                "confidence": r.get("confidence"),
+                "surface_provenance": r.get("surface_provenance"),
+                "dish_height_m": r.get("dish_height_m"),
+                "blocked_azimuths": r.get("blocked_azimuths"),
+                "dsm_uri": dsm_uri,
+                "spec_version": spec_version,
+            }
+            prev = best.get(lid)
+            if prev is None:
+                best[lid] = row
+                continue
+            dh, pdh = row["dish_height_m"], prev["dish_height_m"]
+            if dh is not None and pdh is not None and dh < pdh:
+                best[lid] = row
+    return list(best.values())
+
+
+def write_findings(rows: list[dict]) -> dict[str, list[dict]]:
+    """Write the captured findings to ANALYSIS.findings_dir, one findings_<tile>.json per tile
+    (overwriting any prior file for a tile the agent just scored). Returns {tile_id: rows}."""
+    out_dir = ANALYSIS.findings_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    by_tile: dict[str, list[dict]] = {}
+    for r in rows:
+        by_tile.setdefault(r["tile_id"], []).append(r)
+    for tile_id, tile_rows in by_tile.items():
+        (out_dir / f"findings_{tile_id}.json").write_text(
+            json.dumps(tile_rows, indent=2, default=str)
+        )
+    return by_tile
+
+
+async def _run(options, query: str, verbose: bool, payloads: list[dict]) -> None:
     from claude_agent_sdk import ClaudeSDKClient
 
+    tool_names: dict[str, str] = {}
     async with ClaudeSDKClient(options=options) as client:
         await client.query(query)
         async for message in client.receive_response():
+            _render(message, tool_names, payloads)
             if verbose:
-                _render(message)
+                _print_blocks(message)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -357,7 +463,25 @@ def main(argv: list[str] | None = None) -> None:
     require_api_key()
     options = build_analysis_options(args.model)
     query = _build_query(info)
-    asyncio.run(_run(options, query, verbose=not args.quiet))
+    payloads: list[dict] = []
+    asyncio.run(_run(options, query, verbose=not args.quiet, payloads=payloads))
+
+    # Persist the agent's own scoring (captured off the stream) as the canonical findings,
+    # so A4/A5 consume what A3 actually produced — not a separate deterministic re-run.
+    findings = findings_from_payloads(payloads)
+    if findings:
+        by_tile = write_findings(findings)
+        print(
+            f"\nCaptured {len(findings)} location findings from "
+            f"{len(payloads)} compute_sky_obstruction call(s) -> "
+            f"{ANALYSIS.findings_dir} ({len(by_tile)} tile file(s))"
+        )
+        _print_tier_summary(findings)
+    else:
+        print(
+            "\nWARNING: no compute_sky_obstruction results captured from the agent stream — "
+            "no findings written. (Did the agent score any points?)"
+        )
 
 
 if __name__ == "__main__":

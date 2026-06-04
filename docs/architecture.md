@@ -22,11 +22,11 @@ flowchart TB
     ORCH["🧭 Orchestrator / Planner<br/>(owns run + state + gates)"]
 
     subgraph Agents["Scoped sub-agents — LLM reasons, tools compute"]
-        A1["🔎 Data-Discovery<br/>STAC / catalog search → manifest"]
-        A2["⬇️ Ingestion<br/>COG windows → aligned pseudo-DSM"]
-        A3["📐 Analysis<br/>horizon/viewshed → obstruction% → tier"]
-        A4["✅ Validation/QA<br/>input dedup + output anomaly checks"]
-        A5["📝 Reporting/Insight<br/>aggregates + map + decision log"]
+        A1["🔎 Data-Discovery<br/>STAC / catalog search → manifest<br/><i>get_aoi_bbox · stac_search · opendata_registry_search · write_data_manifest · WebSearch/WebFetch</i>"]
+        A2["⬇️ Ingestion<br/>COG windows → aligned mosaic / pseudo-DSM<br/><i>stac_item_read · fetch_aligned_surface · cache_rw</i>"]
+        A3["📐 Analysis<br/>horizon/viewshed → obstruction% → tier<br/><i>compute_sky_obstruction · find_clear_sky_spot</i>"]
+        A4["✅ Validation/QA<br/>input dedup + output anomaly checks<br/><i>qa_input_audit · qa_location_batch · query_locations · WebFetch</i>"]
+        A5["📝 Reporting/Insight<br/>aggregates + map + decision log<br/><i>aggregate_findings · render_map · write_report · query_locations</i>"]
     end
 
     subgraph Ext["External services / data"]
@@ -63,12 +63,12 @@ The obstruction spec is **not** generated at runtime — the domain research is 
 
 | Agent | Single job | Tools it may call | LLM does | Code does |
 |---|---|---|---|---|
-| **Orchestrator** | Run lifecycle, state, human gates, retries | `spawn_subagent`, `read/write_state`, `log` | Plan, route, decide gates | Persist state |
-| **A1 Data-Discovery** | AOI + spec → ranked **data manifest** | `stac_search`, `http_get`, `web_search` | Rank by res / vintage / coverage / license | Catalog queries |
+| **Orchestrator** | Run lifecycle, state, human gates, retries | *(SDK parent — wires the subagents via `ClaudeAgentOptions`, not a tool-carrying agent)* `spawn_subagent`, `read/write_state`, `log` | Plan, route, decide gates | Persist state |
+| **A1 Data-Discovery** | AOI + spec → ranked **data manifest** | `get_aoi_bbox`, `stac_search`, `opendata_registry_search`, `write_data_manifest`, `WebSearch`/`WebFetch` | Rank by res / vintage / coverage / license | Catalog queries |
 | **A2 Ingestion** | Per-tile fetch + align → **pseudo-DSM** | `stac_item_read`, `fetch_aligned_surface`, `cache_rw` | Pick fallback on failure | Windowed COG read, reproject, fuse |
 | **A3 Analysis** | Score obstruction + classify tier | `compute_sky_obstruction`, `find_clear_sky_spot` | Choose params, handle edges | Horizon/viewshed math (vectorized) |
-| **A4 Validation/QA** | Input quality + output anomalies | `qa_location_batch`, `sql_query`, `web_fetch` | Triage / explain anomalies | Dedup, stats, anomaly rules |
-| **A5 Reporting** | Aggregates, map, plain-English log | `sql_query`, `render_map`, `write_file` | Write officer-facing narrative | Aggregations, map tiles |
+| **A4 Validation/QA** | Input quality + output anomalies | `qa_input_audit`, `qa_location_batch`, `query_locations`, `WebFetch` | Triage / explain anomalies | Dedup, stats, anomaly rules |
+| **A5 Reporting** | Aggregates, map, plain-English log | `aggregate_findings`, `render_map`, `write_report`, `query_locations` | Write officer-facing narrative | Aggregations, map tiles |
 
 **Why this split:** each boundary is drawn where the *tool access* and *failure mode* change. Discovery can touch the open internet but writes no data; ingestion writes data but never reasons about risk; analysis does math but never fetches; QA can read everything but only the orchestrator mutates run state.
 
@@ -185,7 +185,7 @@ Context cannot carry 1M rows, so a **single external source of truth** holds all
 
 Every location carries a **confidence + version stamp**, so partial/degraded results remain usable and auditable rather than silently wrong.
 
-> **Shipped (A4):** the "bad input row" and "anomalous output" rows above are live in [`leo_pipeline.qa`](../src/leo_pipeline/qa.py) behind the `qa_input_audit` / `qa_location_batch` tools. Detection is deterministic and version-stamped (`config.QA.qa_spec_version`); the QA agent only **triages** what the rules surface (using `query_locations` / `web_fetch` to cross-check a flagged region) and decides what reaches the **H2** queue — a `critical` anomaly (tier↔pct inconsistency, out-of-range value, spec drift) blocks an auto-publish, never a silent pass.
+> **Shipped (A4):** the "bad input row" and "anomalous output" rows above are live in [`leo_pipeline.qa`](../src/leo_pipeline/qa.py) behind the `qa_input_audit` / `qa_location_batch` tools. Detection is deterministic and version-stamped (`config.QA.qa_spec_version`); the QA agent only **triages** what the rules surface (using `query_locations` / `WebFetch` to cross-check a flagged region) and decides what reaches the **H2** queue — a `critical` anomaly (tier↔pct inconsistency, out-of-range value, spec drift) blocks an auto-publish, never a silent pass.
 
 ---
 

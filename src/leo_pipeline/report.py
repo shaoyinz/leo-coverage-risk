@@ -49,6 +49,38 @@ STATE_FIPS_NAMES: dict[str, str] = {
     "53": "Washington", "54": "West Virginia", "55": "Wisconsin", "56": "Wyoming",
 }
 
+# 5-digit county FIPS -> name, for the map's county filter dropdown labels. The AOI is North
+# Carolina (state 37), so only NC's 100 counties are enumerated; any FIPS not listed falls back
+# to its raw code (the decision-log caveat "county labels are FIPS, join TIGER for names" still
+# holds for the tables). Codes are the standard NC county FIPS (37001..37199, odd).
+COUNTY_FIPS_NAMES: dict[str, str] = {
+    "37001": "Alamance", "37003": "Alexander", "37005": "Alleghany", "37007": "Anson",
+    "37009": "Ashe", "37011": "Avery", "37013": "Beaufort", "37015": "Bertie",
+    "37017": "Bladen", "37019": "Brunswick", "37021": "Buncombe", "37023": "Burke",
+    "37025": "Cabarrus", "37027": "Caldwell", "37029": "Camden", "37031": "Carteret",
+    "37033": "Caswell", "37035": "Catawba", "37037": "Chatham", "37039": "Cherokee",
+    "37041": "Chowan", "37043": "Clay", "37045": "Cleveland", "37047": "Columbus",
+    "37049": "Craven", "37051": "Cumberland", "37053": "Currituck", "37055": "Dare",
+    "37057": "Davidson", "37059": "Davie", "37061": "Duplin", "37063": "Durham",
+    "37065": "Edgecombe", "37067": "Forsyth", "37069": "Franklin", "37071": "Gaston",
+    "37073": "Gates", "37075": "Graham", "37077": "Granville", "37079": "Greene",
+    "37081": "Guilford", "37083": "Halifax", "37085": "Harnett", "37087": "Haywood",
+    "37089": "Henderson", "37091": "Hertford", "37093": "Hoke", "37095": "Hyde",
+    "37097": "Iredell", "37099": "Jackson", "37101": "Johnston", "37103": "Jones",
+    "37105": "Lee", "37107": "Lenoir", "37109": "Lincoln", "37111": "McDowell",
+    "37113": "Macon", "37115": "Madison", "37117": "Martin", "37119": "Mecklenburg",
+    "37121": "Mitchell", "37123": "Montgomery", "37125": "Moore", "37127": "Nash",
+    "37129": "New Hanover", "37131": "Northampton", "37133": "Onslow", "37135": "Orange",
+    "37137": "Pamlico", "37139": "Pasquotank", "37141": "Pender", "37143": "Perquimans",
+    "37145": "Person", "37147": "Pitt", "37149": "Polk", "37151": "Randolph",
+    "37153": "Richmond", "37155": "Robeson", "37157": "Rockingham", "37159": "Rowan",
+    "37161": "Rutherford", "37163": "Sampson", "37165": "Scotland", "37167": "Stanly",
+    "37169": "Stokes", "37171": "Surry", "37173": "Swain", "37175": "Transylvania",
+    "37177": "Tyrrell", "37179": "Union", "37181": "Vance", "37183": "Wake",
+    "37185": "Warren", "37187": "Washington", "37189": "Watauga", "37191": "Wayne",
+    "37193": "Wilkes", "37195": "Wilson", "37197": "Yadkin", "37199": "Yancey",
+}
+
 
 def _weight(lid: str, weight_of: Mapping[str, float] | None) -> float:
     """Household weight for a finding — ``n_locations`` collapsed onto its unique coordinate,
@@ -131,12 +163,18 @@ def aggregate_findings(
 def findings_to_geojson(
     findings: list[Mapping[str, Any]],
     lonlat_of: Mapping[str, tuple[float, float]] | None = None,
+    county_of: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """A point ``FeatureCollection`` of the findings coloured downstream by ``risk_tier``.
 
     Coordinates come from the finding itself (``lon``/``lat``) when present, else from
     ``lonlat_of[location_id]`` (built from the unique-coordinate work list). Findings with no
-    resolvable coordinate are skipped (they cannot be placed)."""
+    resolvable coordinate are skipped (they cannot be placed).
+
+    ``county_of[location_id] -> 5-digit county FIPS`` (the same dedup-map join the aggregates
+    use) is baked onto each feature as ``county`` + ``state`` (FIPS[:2]) so the MapLibre viewer
+    can filter by county/state tile-side. Points with no county join carry neither (they show
+    only under the "All" selections)."""
     features = []
     for f in findings:
         lid = str(f.get("location_id"))
@@ -145,16 +183,21 @@ def findings_to_geojson(
             lon, lat = lonlat_of[lid]
         if lon is None or lat is None:
             continue
+        props: dict[str, Any] = {
+            "location_id": lid,
+            "risk_tier": f.get("risk_tier") or "undetermined",
+            "obstruction_pct": f.get("obstruction_pct"),
+            "confidence": f.get("confidence"),
+        }
+        fips = county_of.get(lid) if county_of else None
+        if fips:
+            props["county"] = str(fips)
+            props["state"] = str(fips)[:2]
         features.append(
             {
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [float(lon), float(lat)]},
-                "properties": {
-                    "location_id": lid,
-                    "risk_tier": f.get("risk_tier") or "undetermined",
-                    "obstruction_pct": f.get("obstruction_pct"),
-                    "confidence": f.get("confidence"),
-                },
+                "properties": props,
             }
         )
     return {"type": "FeatureCollection", "features": features}
@@ -210,18 +253,46 @@ def maplibre_html(
     zoom: float,
     title: str = "LEO coverage-risk map",
     report: Reporting = REPORTING,
+    aggregates: Mapping[str, Any] | None = None,
 ) -> str:
-    """A self-contained MapLibre + PMTiles viewer (CDN libs; raster basemap; circle layer
-    coloured by risk tier with a legend + click popup). Pure string — no I/O — so it is unit
-    testable and the PMTiles file is referenced by a relative path next to the HTML."""
+    """A self-contained MapLibre + PMTiles viewer: satellite basemap + DEM terrain/hillshade/sky,
+    a circle layer coloured by ``risk_tier``, click popups, a toggleable legend, and **state +
+    county filter dropdowns** that combine with the tier toggles. Pure string — no I/O — so it
+    stays unit testable and the PMTiles file is referenced by a relative path next to the HTML.
+
+    ``aggregates`` (the county/state rollup) supplies the dropdown options: ``states`` ->
+    ``state`` choices, ``counties`` -> ``county`` choices (labelled via ``COUNTY_FIPS_NAMES``,
+    falling back to the raw FIPS). With no ``aggregates`` the panel shows only the "All" rows."""
     colors = report.tier_colors
     match_expr = ["match", ["get", "risk_tier"]]
     for tier, color in colors.items():
         match_expr += [tier, color]
     match_expr += ["#888888"]  # fallback colour
-    legend = "".join(
-        f'<div><span style="background:{c}"></span>{t}</div>' for t, c in colors.items()
+    legend_rows = "".join(
+        f'<div class="row" data-tier="{t}"><span style="background:{c}"></span>{t}</div>'
+        for t, c in colors.items()
     )
+    tiers_json = json.dumps(list(colors.keys()))
+
+    states = (aggregates or {}).get("states") or []
+    counties = (aggregates or {}).get("counties") or []
+    state_opts = "".join(
+        f'<option value="{s["region"]}">{s.get("state_name", s["region"])}</option>'
+        for s in states
+    )
+    # Counties alphabetised by display name for a usable dropdown (aggregates are at-risk-ranked).
+    county_labelled = sorted(
+        (
+            (str(c["region"]), COUNTY_FIPS_NAMES.get(str(c["region"]), str(c["region"])))
+            for c in counties
+        ),
+        key=lambda fc: fc[1],
+    )
+    county_opts = "".join(
+        f'<option value="{fips}" data-state="{fips[:2]}">{name} ({fips})</option>'
+        for fips, name in county_labelled
+    )
+
     return f"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8"><title>{title}</title>
@@ -231,25 +302,63 @@ def maplibre_html(
 <script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <style>
   html,body,#map{{margin:0;height:100%;width:100%}}
+  .panel{{position:absolute;top:10px;left:10px;background:#fff;padding:8px 10px;
+    font:13px/1.4 sans-serif;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.3);min-width:170px}}
+  .panel b{{display:block;margin-bottom:6px}}
+  .panel label{{display:block;color:#555;font-size:11px;margin:6px 0 2px}}
+  .panel select{{width:100%;font:12px sans-serif;padding:2px}}
   .legend{{position:absolute;bottom:18px;left:10px;background:#fff;padding:8px 10px;
     font:13px/1.4 sans-serif;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.3)}}
-  .legend span{{display:inline-block;width:12px;height:12px;margin-right:6px;border-radius:50%;vertical-align:middle}}
   .legend b{{display:block;margin-bottom:4px}}
+  .legend .row{{cursor:pointer;user-select:none;display:flex;align-items:center;padding:1px 0}}
+  .legend .row span{{display:inline-block;width:12px;height:12px;margin-right:6px;border-radius:50%;vertical-align:middle}}
+  .legend .row.off{{opacity:.4}}
+  .legend .row.off span{{box-shadow:inset 0 0 0 2px #fff}}
+  .legend .hint{{margin-top:5px;color:#666;font-size:11px}}
 </style></head><body>
 <div id="map"></div>
-<div class="legend"><b>{title}</b>{legend}</div>
+<div class="panel"><b>Filters</b>
+  <label for="stateSel">State</label>
+  <select id="stateSel"><option value="">All states</option>{state_opts}</select>
+  <label for="countySel">County</label>
+  <select id="countySel"><option value="">All counties</option>{county_opts}</select>
+</div>
+<div class="legend"><b>{title}</b>{legend_rows}
+  <div class="hint">click a tier to toggle</div>
+</div>
 <script>
   let protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
   const map = new maplibregl.Map({{
     container: "map",
     style: {{ version: 8,
-      sources: {{ osm: {{ type: "raster", tiles: ["{report.map_basemap_url}"],
-        tileSize: 256, attribution: "© OpenStreetMap contributors" }} }},
-      layers: [{{ id: "osm", type: "raster", source: "osm" }}] }},
-    center: {center}, zoom: {zoom}
+      sources: {{
+        sat: {{ type: "raster",
+          tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}"],
+          tileSize: 256, maxzoom: 19,
+          attribution: "Imagery © Esri, Maxar, Earthstar Geographics" }},
+        dem: {{ type: "raster-dem",
+          tiles: ["https://elevation-tiles-prod.s3.amazonaws.com/terrarium/{{z}}/{{x}}/{{y}}.png"],
+          tileSize: 256, maxzoom: 14, encoding: "terrarium",
+          attribution: "Elevation: Mapzen / AWS Terrain Tiles" }}
+      }},
+      layers: [
+        {{ id: "sat", type: "raster", source: "sat" }},
+        {{ id: "hillshade", type: "hillshade", source: "dem",
+          paint: {{ "hillshade-exaggeration": 0.4 }} }}
+      ] }},
+    center: {center}, zoom: {zoom}, pitch: 55, maxPitch: 80
   }});
+  map.addControl(new maplibregl.NavigationControl({{ visualizePitch: true }}), "top-right");
+
   map.on("load", () => {{
+    map.setTerrain({{ source: "dem", exaggeration: 1.4 }});
+    map.setSky({{
+      "sky-color": "#88b8e8", "sky-horizon-blend": 0.5,
+      "horizon-color": "#dfeefc", "horizon-fog-blend": 0.6,
+      "fog-color": "#e8eef4", "fog-ground-blend": 0.4
+    }});
+
     map.addSource("loc", {{ type: "vector", url: "pmtiles://./{pmtiles_filename}" }});
     map.addLayer({{ id: "loc", type: "circle", source: "loc",
       "source-layer": "{report.map_layer_name}",
@@ -258,6 +367,40 @@ def maplibre_html(
         "circle-color": {json.dumps(match_expr)},
         "circle-opacity": 0.85, "circle-stroke-width": 0.3, "circle-stroke-color": "#333"
       }} }});
+
+    // Combined filter: active risk tiers (legend toggles) AND the state/county dropdowns.
+    const active = new Set({tiers_json});
+    const stateSel = document.getElementById("stateSel");
+    const countySel = document.getElementById("countySel");
+    const allCountyOptions = Array.from(countySel.options).map((o) => o.cloneNode(true));
+    const applyFilter = () => {{
+      const preds = [["in", ["get", "risk_tier"], ["literal", [...active]]]];
+      if (stateSel.value) preds.push(["==", ["get", "state"], stateSel.value]);
+      if (countySel.value) preds.push(["==", ["get", "county"], countySel.value]);
+      map.setFilter("loc", ["all", ...preds]);
+    }};
+
+    document.querySelectorAll(".legend .row").forEach((row) => {{
+      row.addEventListener("click", () => {{
+        const t = row.dataset.tier;
+        if (active.has(t)) {{ active.delete(t); row.classList.add("off"); }}
+        else {{ active.add(t); row.classList.remove("off"); }}
+        applyFilter();
+      }});
+    }});
+
+    // Cascade: narrow the county list to the chosen state (reset to All on change).
+    const repopulateCounties = () => {{
+      const st = stateSel.value;
+      countySel.innerHTML = "";
+      allCountyOptions.forEach((o) => {{
+        if (!o.value || !st || o.dataset.state === st) countySel.appendChild(o.cloneNode(true));
+      }});
+      countySel.value = "";
+    }};
+    stateSel.addEventListener("change", () => {{ repopulateCounties(); applyFilter(); }});
+    countySel.addEventListener("change", applyFilter);
+
     map.on("click", "loc", (e) => {{
       const p = e.features[0].properties;
       new maplibregl.Popup().setLngLat(e.lngLat)
@@ -277,13 +420,18 @@ def build_map(
     out_dir: Path,
     *,
     lonlat_of: Mapping[str, tuple[float, float]] | None = None,
+    county_of: Mapping[str, str] | None = None,
+    aggregates: Mapping[str, Any] | None = None,
     run_tiles: bool = True,
     report: Reporting = REPORTING,
 ) -> dict[str, Any]:
     """Write the GeoJSON layer, tile it to PMTiles (best-effort), and emit the MapLibre HTML.
-    Returns artifact paths + a note; degrades gracefully if tippecanoe is unavailable."""
+    Returns artifact paths + a note; degrades gracefully if tippecanoe is unavailable.
+
+    ``county_of`` bakes county/state onto each point (so the viewer can filter by them) and
+    ``aggregates`` (the county/state rollup) populates the filter dropdowns."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    geojson = findings_to_geojson(findings, lonlat_of)
+    geojson = findings_to_geojson(findings, lonlat_of, county_of)
     geojson_path = out_dir / "locations.geojson"
     geojson_path.write_text(json.dumps(geojson))
 
@@ -294,7 +442,9 @@ def build_map(
     if run_tiles:
         pmtiles_written, note = run_tippecanoe(geojson_path, pmtiles_path, report)
 
-    html = maplibre_html(pmtiles_path.name, center=center, zoom=zoom, report=report)
+    html = maplibre_html(
+        pmtiles_path.name, center=center, zoom=zoom, report=report, aggregates=aggregates
+    )
     html_path = out_dir / "coverage_map.html"
     html_path.write_text(html)
 
@@ -437,7 +587,10 @@ def build_report(
     agg_path = out_dir / "aggregates.json"
     agg_path.write_text(json.dumps(aggregates, indent=2, default=str))
 
-    map_info = build_map(findings, out_dir, lonlat_of=lonlat_of, run_tiles=run_tiles, report=report)
+    map_info = build_map(
+        findings, out_dir, lonlat_of=lonlat_of, county_of=county_of,
+        aggregates=aggregates, run_tiles=run_tiles, report=report,
+    )
     log_md = decision_log_markdown(
         aggregates, anomalies=anomalies, map_rel=Path(map_info["html"]).name, report=report
     )

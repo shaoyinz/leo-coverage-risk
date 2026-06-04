@@ -13,11 +13,11 @@ flowchart TB
     ORCH["🧭 Orchestrator / Planner<br/>(owns run + state + gates)"]
 
     subgraph Agents["Scoped sub-agents — LLM reasons, tools compute"]
-        A1["🔎 Data-Discovery<br/>STAC / catalog search → manifest"]
-        A2["⬇️ Ingestion<br/>COG windows → aligned pseudo-DSM"]
-        A3["📐 Analysis<br/>horizon/viewshed → obstruction% → tier"]
-        A4["✅ Validation/QA<br/>input dedup + output anomaly checks"]
-        A5["📝 Reporting/Insight<br/>aggregates + map + decision log"]
+        A1["🔎 Data-Discovery<br/>STAC / catalog search → manifest<br/><i>get_aoi_bbox · stac_search · opendata_registry_search · write_data_manifest · WebSearch/WebFetch</i>"]
+        A2["⬇️ Ingestion<br/>COG windows → aligned mosaic / pseudo-DSM<br/><i>stac_item_read · fetch_aligned_surface · cache_rw</i>"]
+        A3["📐 Analysis<br/>horizon/viewshed → obstruction% → tier<br/><i>compute_sky_obstruction · find_clear_sky_spot</i>"]
+        A4["✅ Validation/QA<br/>input dedup + output anomaly checks<br/><i>qa_input_audit · qa_location_batch · query_locations · WebFetch</i>"]
+        A5["📝 Reporting/Insight<br/>aggregates + map + decision log<br/><i>aggregate_findings · render_map · write_report · query_locations</i>"]
     end
 
     subgraph Ext["External services / data"]

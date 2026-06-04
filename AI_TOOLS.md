@@ -257,5 +257,26 @@ as work proceeds.
   is now proven live; a full-dataset run still uses the no-LLM `leo-full` engine for cost. The
   README's "Not yet agentically verified" caveats for A2–A5 are now satisfied.
 
+### 2026-06-04 — Map filtering by state / county / risk tier (interactivity bonus)
+- **Used:** Claude Code (Opus 4.8) to add the missing **state/county filtering** to the
+  interactive map. The deployed `coverage_map.html` already had risk-tier toggles, satellite +
+  DEM-terrain overlays, and click popups; it lacked the state/county filter the bonus calls for.
+  Changes (all in `src/leo_pipeline/report.py`): bake `county` (5-digit FIPS) + `state` (FIPS[:2])
+  onto each GeoJSON feature via the existing `_county_weight_maps` join; fold the rich map +
+  two cascading filter dropdowns into the canonical `maplibre_html` generator (combined
+  `["all", tier, state, county]` `setFilter`); add a static NC county FIPS→name lookup for
+  human-readable dropdown labels.
+- **Accepted as-is:** the dropdown-driven `setFilter` approach and the build-time injection of
+  options from the county/state aggregates.
+- **Diverged / corrected:** chose to **unify the divergence** — the deployed rich HTML had drifted
+  from the plain template `maplibre_html` emitted, so a regenerate would have downgraded it. Folded
+  the satellite/terrain/sky/toggle map *and* the new filters back into the generator so
+  `leo-report --compute` reproduces the good, filterable map. County labels use real names
+  (e.g. *Mecklenburg (37119)*) rather than raw FIPS for usability.
+- **Verified:** `pytest tests/test_report.py` (12 passed) incl. new geojson county/state + filter
+  dropdown assertions; regenerated `locations.geojson` / `locations.pmtiles` / `coverage_map.html`
+  for the full ~4.5M-point AOI and confirmed `county`/`state` properties are present and the
+  State/County dropdowns filter the rendered points.
+
 > When you accept, reject, or rework AI-generated analysis or code, add a dated entry
 > noting what and why. This is graded under "Communication & documentation."
