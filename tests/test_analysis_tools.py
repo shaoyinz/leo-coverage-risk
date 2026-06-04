@@ -75,11 +75,11 @@ def test_horizon_profile_recovers_single_obstacle_angle(tmp_path):
     xc = X0 + (cx + 0.5) * GSD
     yc = Y0 + (n - (cx + 0.5)) * GSD  # row cx -> northing
     az = horizon.azimuths_for(2.0)
-    H, frac = horizon.horizon_profile(s, xc, yc, BASE, az, max_radius_m=200.0)
+    prof = horizon.horizon_profile(s, xc, yc, BASE, az, max_radius_m=200.0)
     expected = np.degrees(np.arctan2(30.0, 50.0))
     i0 = int(np.argmin(np.abs(az - 0.0)))
-    assert H[i0] == pytest.approx(expected, abs=3.0)
-    assert frac > 0.9
+    assert prof.H[i0] == pytest.approx(expected, abs=3.0)
+    assert prof.sampled_fraction > 0.9
 
 
 def test_derived_max_radius_matches_geometry():
@@ -87,6 +87,42 @@ def test_derived_max_radius_matches_geometry():
     r = horizon.derived_max_radius(40.0, 2.0, 25.0)
     assert r == pytest.approx(38.0 / np.tan(np.radians(25.0)), rel=1e-6)
     assert horizon.derived_max_radius(2.0, 5.0, 25.0) == 0.0  # obstacle below dish
+
+
+def test_confidence_flag_provenance_drives_base():
+    """Provenance under the point is the dominant term, with full near-field coverage and a
+    robust (wide) clearance so neither knock-down fires: lidar→high, pseudo→medium, fill→low."""
+    spec = horizon.SkySpec()
+    assert horizon.confidence_flag("lidar", 1.0, 50.0, 0.0, spec) == "high"
+    assert horizon.confidence_flag("pseudo", 1.0, 50.0, 0.0, spec) == "medium"
+    assert horizon.confidence_flag("dem_fill", 1.0, 50.0, 0.0, spec) == "low"
+
+
+def test_confidence_flag_open_sky_is_not_penalised():
+    """A wide-open lidar point (obstruction 0%, clearance ≫ σ_H) stays HIGH — the old whole-ray
+    sampled_fraction rule wrongly knocked these to low."""
+    spec = horizon.SkySpec()
+    assert horizon.confidence_flag("lidar", 1.0, 99.0, 0.0, spec) == "high"
+
+
+def test_confidence_flag_near_field_gap_knocks_down_but_distant_gap_does_not():
+    spec = horizon.SkySpec()
+    # near-field coverage 0.4 (< med 0.5) → −2 notches from high → low
+    assert horizon.confidence_flag("lidar", 0.4, 50.0, 0.0, spec) == "low"
+    # near-field coverage 0.7 (< high 0.9) → −1 → medium
+    assert horizon.confidence_flag("lidar", 0.7, 50.0, 0.0, spec) == "medium"
+    # full near-field coverage → no penalty even if the *whole* ray had distant gaps
+    assert horizon.confidence_flag("lidar", 1.0, 50.0, 0.0, spec) == "high"
+
+
+def test_confidence_flag_sigma_h_borderline_clearance_knocks_down():
+    spec = horizon.SkySpec(sigma_h_m=3.0)
+    # clearance within ±σ_H of the θ-line → verdict could flip → −1
+    assert horizon.confidence_flag("lidar", 1.0, 1.0, 0.0, spec) == "medium"
+    # a breaching obstacle far past the line (−20 m) is unambiguous severe → no penalty
+    assert horizon.confidence_flag("lidar", 1.0, -20.0, 50.0, spec) == "high"
+    # inf clearance (no obstacle considered) → no penalty
+    assert horizon.confidence_flag("lidar", 1.0, float("inf"), 0.0, spec) == "high"
 
 
 def test_azimuth_weights_zero_outside_cone_and_suppress_south():

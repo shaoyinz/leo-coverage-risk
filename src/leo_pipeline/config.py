@@ -178,7 +178,9 @@ class Analysis:
 
     # Version stamp recorded on every finding so a score is reproducible and drift-detectable
     # (architecture.md §4 versioning). Bump when any geometry/threshold default below changes.
-    spec_version: str = "spec-2026.06-theta25"
+    # 2026.07: surface is a gap-filled mosaic (lidar over DEM) + per-pixel provenance, and the
+    # confidence flag is provenance/near-field/σ_H-margin driven (was whole-ray + pct-band).
+    spec_version: str = "spec-2026.07-mosaic"
 
     # --- Reception geometry (physical / regulatory; rationale "Starlink reception geometry") ---
     # Minimum reception (elevation) angle θ above the horizon. 25° is the conservative,
@@ -209,10 +211,21 @@ class Analysis:
     # MUST be calibrated against the Starlink app on a labelled sample (open question).
     band_clear_max_pct: float = 1.0
     band_severe_min_pct: float = 10.0
-    # Vertical-uncertainty budget (metres). In this first live build σ_H is folded into the
-    # confidence flag (a borderline pct near a cut-point is reported lower-confidence) rather
-    # than a full probabilistic clearance-margin model — the latter is a documented next step.
+    # Vertical-uncertainty budget σ_H (metres). Folded into the confidence flag as a
+    # *borderline* signal: a verdict whose controlling clearance to the θ-line is within ±σ_H
+    # could flip under the surfaces' multi-metre error, so it is reported one notch lower. A
+    # full probabilistic clearance-margin model remains a documented next step.
     sigma_h_m: float = 3.0
+    # --- Confidence calibration defaults (consumed by horizon.confidence_flag) ---
+    # Radius (m) within which ray-sampling coverage actually decides the verdict; confidence
+    # tracks coverage HERE, not over the full max_radius_m ray, so distant gaps don't penalise
+    # an otherwise-clean near-field reading.
+    confidence_near_field_m: float = 500.0
+    # Near-field sampled-fraction cut-points: ≥ high → no penalty; ≥ med → −1 notch; else −2.
+    # MUST be calibrated against the Starlink app on a labelled sample (open question), like
+    # the risk bands above; they are defaults, not magic constants buried in code.
+    conf_near_sampled_high: float = 0.9
+    conf_near_sampled_med: float = 0.5
 
     # --- Search & computation ---
     # Angular resolution of the horizon profile (degrees). Finer = more accurate, more compute.
@@ -270,6 +283,10 @@ class QA:
     degenerate_group_min: int = 20
     # Run-level coverage rules: flag when the share of undetermined (no surface under the
     # point) or low-confidence scores exceeds these — the surface data is too thin to trust.
+    # Calibration defaults, not hard constants. Since A2 now gap-fills surfaces into a mosaic
+    # (DEM behind lidar), genuine `undetermined` (no DEM either) should be rare, so 20% is a
+    # generous ceiling; `low_confidence` now tracks real DEM-fill share (coarse data under the
+    # point), not a whole-ray sampling artifact, so 30% flags a run dominated by bare-DEM fill.
     max_undetermined_rate: float = 0.20
     max_low_confidence_rate: float = 0.30
 

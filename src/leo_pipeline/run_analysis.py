@@ -236,9 +236,7 @@ def compute_findings(info: dict) -> list[dict]:
         rows = []
         for p in batch["points"]:
             score = horizon.score_point(sampler, p["lon"], p["lat"], dish_h, spec)
-            conf = horizon.confidence_flag(
-                surface_conf, score.get("sampled_fraction", 0.0), score.get("obstruction_pct") or 0.0, spec
-            )
+            conf = horizon.confidence_for_score(score, spec, surface_confidence=surface_conf)
             rows.append(
                 {
                     "location_id": p["location_id"],
@@ -246,6 +244,7 @@ def compute_findings(info: dict) -> list[dict]:
                     "obstruction_pct": score["obstruction_pct"],
                     "risk_tier": score["risk_tier"],
                     "confidence": conf,
+                    "surface_provenance": score.get("surface_provenance"),
                     "dish_height_m": score["dish_height_m"],
                     "blocked_azimuths": score["blocked_azimuths"],
                     "dsm_uri": batch["dsm_uri"],

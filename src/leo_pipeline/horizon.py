@@ -47,6 +47,18 @@ class SkySpec:
     azimuth_step_deg: float = 2.0
     max_radius_m: float = 1500.0
     earth_curvature: bool = False
+    # --- confidence inputs (config.Analysis; documented calibration defaults, not magic
+    # numbers buried in code) ---
+    # Vertical-uncertainty budget σ_H (m): a verdict whose clearance to the θ-line is within
+    # ±σ_H could flip under the surfaces' multi-metre error → knocked down one notch.
+    sigma_h_m: float = 3.0
+    # Radius (m) within which ray-sampling coverage actually governs the horizon. Confidence
+    # tracks coverage HERE, not over the full max_radius_m ray, so distant gaps (which cannot
+    # change a near-field verdict) stop spuriously penalising an otherwise-clean reading.
+    confidence_near_field_m: float = 500.0
+    # Near-field sampled-fraction cut-points: ≥ high → no penalty; ≥ med → −1 notch; else −2.
+    conf_near_sampled_high: float = 0.9
+    conf_near_sampled_med: float = 0.5
 
 
 # --- surface sampling ----------------------------------------------------------------
@@ -72,6 +84,9 @@ class SurfaceSampler:
             self.crs = src.crs
             self.nodata = float(src.nodata) if src.nodata is not None else -9999.0
             self.gsd_m = float(abs(src.transform.a))
+            # Band 2 (when present) is the A2 per-pixel provenance code (0 nodata / 1 dem_fill
+            # / 2 dem+canopy / 3 lidar). Single-band test/legacy surfaces have no band 2.
+            self.provenance = src.read(2).astype("int16") if src.count >= 2 else None
         self.height, self.width = self.array.shape
         self._inv = ~self.transform
         # Valid-pixel mask once; bilinear weights are zeroed on invalid corners.
@@ -124,6 +139,24 @@ class SurfaceSampler:
         out = np.where(good, np.divide(acc, wsum, out=np.full_like(acc, self.nodata), where=good), self.nodata)
         return out, good & valid_any
 
+    def sample_provenance(self, x: float, y: float) -> str | None:
+        """Nearest-pixel provenance label of the surface under metric ``(x, y)`` — which data
+        source the elevation came from (``lidar`` / ``pseudo`` / ``dem_fill``). ``None`` when
+        the surface has no provenance band (legacy single-band) or the point is off-grid."""
+        if self.provenance is None:
+            return None
+        col = int(round(self._inv.a * x + self._inv.b * y + self._inv.c - 0.5))
+        row = int(round(self._inv.d * x + self._inv.e * y + self._inv.f - 0.5))
+        if not (0 <= row < self.height and 0 <= col < self.width):
+            return None
+        return PROVENANCE_LABELS.get(int(self.provenance[row, col]))
+
+
+# Per-pixel provenance codes written to DSM band 2 by A2's fetch_aligned_surface, and their
+# labels. Shared by the writer (tools) and the reader (sampler) so the two never drift.
+PROVENANCE_CODES = {"nodata": 0, "dem_fill": 1, "pseudo": 2, "lidar": 3}
+PROVENANCE_LABELS = {0: None, 1: "dem_fill", 2: "pseudo", 3: "lidar"}
+
 
 # --- horizon geometry ----------------------------------------------------------------
 
@@ -133,6 +166,25 @@ def azimuths_for(step_deg: float) -> np.ndarray:
     step = max(0.1, float(step_deg))
     n = max(1, int(round(360.0 / step)))
     return (np.arange(n) * (360.0 / n)).astype("float64")
+
+
+@dataclass(frozen=True)
+class HorizonResult:
+    """Per-azimuth horizon plus the auxiliary signals the confidence flag needs.
+
+    ``H`` is the horizon angle (deg) per azimuth. ``sampled_fraction`` is the share of *all*
+    ray samples that hit valid surface; ``near_sampled_fraction`` is that share restricted to
+    the near field (``confidence_near_field_m``), which is what actually governs the verdict.
+    ``min_clearance_by_az`` is, per azimuth, the smallest *vertical* gap (m) between the θ-line
+    ``z_dish + r·tanθ`` and the surface over valid samples — the room before an obstacle on
+    that bearing would breach the required elevation (``None`` when θ wasn't supplied). All
+    arrays are indexed by the input ``azimuths``.
+    """
+
+    H: np.ndarray
+    sampled_fraction: float
+    near_sampled_fraction: float
+    min_clearance_by_az: np.ndarray | None
 
 
 def horizon_profile(
@@ -145,13 +197,15 @@ def horizon_profile(
     max_radius_m: float,
     step_m: float | None = None,
     earth_curvature: bool = False,
-) -> tuple[np.ndarray, float]:
+    near_field_m: float | None = None,
+    theta_deg: float | None = None,
+) -> HorizonResult:
     """Per-azimuth horizon angle (degrees) seen from ``(x0, y0, z_dish)``.
 
     Marches each bearing outward in ``step_m`` increments to ``max_radius_m``, sampling the
-    surface, and takes the maximum elevation angle — exactly ``H(φ)`` above. Returns
-    ``(H, sampled_fraction)`` where ``sampled_fraction`` is the share of ray samples that hit
-    valid surface (feeds the confidence flag). Vectorised over azimuths × radii.
+    surface, and takes the maximum elevation angle — exactly ``H(φ)`` above. Also returns the
+    near-field sampling coverage and, when ``theta_deg`` is given, the per-azimuth vertical
+    clearance to the θ-line (both feed the confidence flag). Vectorised over azimuths × radii.
     """
     step = float(step_m) if step_m else max(1.0, sampler.gsd_m)
     radii = np.arange(step, float(max_radius_m) + step, step, dtype="float64")
@@ -173,7 +227,26 @@ def horizon_profile(
     angle = np.where(valid, angle, -90.0)
     H = angle.max(axis=1)
     sampled_fraction = float(valid.mean()) if valid.size else 0.0
-    return H, sampled_fraction
+
+    # Near-field coverage: only the samples close enough to set the verdict (architecture §5).
+    if near_field_m is not None:
+        near = radii <= float(near_field_m)
+        near_valid = valid[:, near]
+        near_sampled_fraction = float(near_valid.mean()) if near_valid.size else 0.0
+    else:
+        near_sampled_fraction = sampled_fraction
+
+    # Per-azimuth vertical clearance to the θ-line: how far the surface sits below the line an
+    # obstacle must reach to start blocking. Min over valid samples on the bearing; ``inf``
+    # where the ray found no valid surface (so it never forces a spurious knock-down).
+    min_clearance_by_az: np.ndarray | None = None
+    if theta_deg is not None:
+        z_threshold = z_dish + r * math.tan(math.radians(max(1e-3, float(theta_deg))))  # (1, R)
+        clearance = z_threshold - z  # (A, R); >0 surface below the line, <0 it breaches
+        clearance = np.where(valid, clearance, np.inf)
+        min_clearance_by_az = clearance.min(axis=1)
+
+    return HorizonResult(H, sampled_fraction, near_sampled_fraction, min_clearance_by_az)
 
 
 def _wrap180(delta: np.ndarray) -> np.ndarray:
@@ -235,38 +308,70 @@ def classify_tier(pct: float, spec: SkySpec) -> str:
     return "severe"
 
 
+# Provenance code (DSM band 2) → the confidence the *data under the point* warrants. A lidar
+# pixel carries canopy+buildings (trustworthy); a DEM+canopy pixel is modelled, not measured;
+# a bare-DEM fill pixel cannot see trees/structures at all, so a verdict there is coarse.
+_PROVENANCE_BASE = {"lidar": "high", "pseudo": "medium", "dem_fill": "low", "dem": "low"}
+
+
 def confidence_flag(
-    surface_confidence: str | None,
-    sampled_fraction: float,
+    surface_provenance: str | None,
+    near_sampled_fraction: float,
+    clearance_margin_m: float | None,
     pct: float,
     spec: SkySpec,
+    *,
+    surface_confidence: str | None = None,
 ) -> str:
-    """Fold the surface's own confidence, ray-sampling coverage, and σ_H borderline-ness into
-    one high/medium/low flag (architecture.md §5: degraded results stay usable + auditable).
+    """One high/medium/low confidence flag from three *physical*, config-driven signals
+    (architecture.md §5: degraded results stay usable + auditable) — replacing the earlier
+    hand-tuned cut-offs on whole-ray coverage and pct-band proximity:
 
-    σ_H is handled here as a *borderline* signal rather than a full probabilistic margin
-    (a documented next step): when ``pct`` sits within a few-metre-equivalent band of a tier
-    cut-point — i.e. the verdict could flip under the surfaces' multi-metre vertical error —
-    the confidence is knocked down a notch.
+    1. **Surface provenance under the point** (dominant): lidar > DEM+canopy > bare-DEM fill.
+       Falls back to the tile-level ``surface_confidence`` when no provenance band exists.
+    2. **Near-field sampling coverage** (``spec.confidence_near_field_m``): gaps in the field
+       that actually sets the horizon cost a notch (−1) or two (−2); distant gaps don't.
+    3. **σ_H clearance margin**: knock down one notch only when the verdict is *borderline* —
+       the surface sits within ±``spec.sigma_h_m`` of the θ-line, so the multi-metre vertical
+       error could flip it. An unambiguous reading (wide-open sky, or an obstacle clearing the
+       line by ≫ σ_H) is NOT penalised. This is the documented σ_H *borderline* signal, not yet
+       a full probabilistic clearance-margin model.
     """
     order = ["low", "medium", "high"]
-    base = surface_confidence if surface_confidence in order else "medium"
+    base = _PROVENANCE_BASE.get(surface_provenance)
+    if base is None:
+        base = surface_confidence if surface_confidence in order else "medium"
     level = order.index(base)
-    # Poorly-sampled rays (gaps / edge tiles) cost confidence.
-    if sampled_fraction < 0.5:
+
+    # Near-field sampling coverage (gaps where the verdict is actually decided).
+    if near_sampled_fraction < spec.conf_near_sampled_med:
         level -= 2
-    elif sampled_fraction < 0.9:
+    elif near_sampled_fraction < spec.conf_near_sampled_high:
         level -= 1
-    # σ_H borderline: a pct hugging a cut-point could flip tier under the surfaces' multi-metre
-    # vertical error → knock down. The bands are one-sided enough not to penalise an
-    # unambiguous 0% (which cannot flip to at_risk under small error).
-    near_cut = (
-        0.5 <= pct <= spec.band_clear_max_pct + 0.5
-        or abs(pct - spec.band_severe_min_pct) <= 2.0
-    )
-    if near_cut:
-        level -= 1
+
+    # σ_H borderline: only when the controlling clearance hugs the θ-line within ±σ_H. ``inf``
+    # (no obstacle considered) and a wide margin both leave the verdict robust → no penalty.
+    if clearance_margin_m is not None and math.isfinite(clearance_margin_m):
+        if abs(clearance_margin_m) < spec.sigma_h_m:
+            level -= 1
+
     return order[max(0, min(len(order) - 1, level))]
+
+
+def confidence_for_score(
+    score: dict[str, Any], spec: SkySpec, *, surface_confidence: str | None = None
+) -> str:
+    """Convenience wrapper: pull the confidence signals out of a :func:`score_xy` result and
+    flag it. Keeps the three call sites (run_analysis, compute_sky_obstruction,
+    find_clear_sky_spot) consistent."""
+    return confidence_flag(
+        score.get("surface_provenance"),
+        score.get("near_sampled_fraction", score.get("sampled_fraction", 0.0)),
+        score.get("clearance_margin_m"),
+        score.get("obstruction_pct") or 0.0,
+        spec,
+        surface_confidence=surface_confidence,
+    )
 
 
 def derived_max_radius(h_b_max_m: float, h_a_m: float, theta_min_deg: float) -> float:
@@ -303,12 +408,15 @@ def score_xy(
             "blocked_azimuths": [],
             "horizon_profile": None,
             "confidence": "low",
+            "surface_provenance": None,
+            "near_sampled_fraction": 0.0,
+            "clearance_margin_m": None,
             "reason": "no_surface_under_point",
             "dish_height_m": mount_height_m,
         }
     z_dish = float(z_surf) + float(mount_height_m)
     azimuths = azimuths_for(spec.azimuth_step_deg)
-    H, sampled_fraction = horizon_profile(
+    prof = horizon_profile(
         sampler,
         x0,
         y0,
@@ -316,11 +424,28 @@ def score_xy(
         azimuths,
         max_radius_m=spec.max_radius_m,
         earth_curvature=spec.earth_curvature,
+        near_field_m=spec.confidence_near_field_m,
+        theta_deg=spec.min_elevation_deg,
     )
+    H = prof.H
     pct, blocked_az = obstruction_fraction(H, azimuths, spec)
+    # Tier on the SAME rounded pct that gets stored, so a value microscopically over a band
+    # edge (e.g. 1.004 → at_risk) can't be reported with a pct that rounds back across it
+    # (1.0 → reads as clear). Keeps risk_tier and obstruction_pct consistent under the spec
+    # bands — the tier_inconsistent QA rule. Round once, here.
+    pct = round(pct, 2)
     tier = classify_tier(pct, spec)
+    # Controlling clearance = the tightest vertical room to the θ-line over the *weighted* sky
+    # cone (azimuths outside the cone can't change the verdict, so they can't change confidence).
+    clearance_margin_m: float | None = None
+    if prof.min_clearance_by_az is not None:
+        in_cone = azimuth_weights(azimuths, spec) > 0
+        cone_clear = prof.min_clearance_by_az[in_cone]
+        cone_clear = cone_clear[np.isfinite(cone_clear)]
+        if cone_clear.size:
+            clearance_margin_m = round(float(cone_clear.min()), 2)
     return {
-        "obstruction_pct": round(pct, 2),
+        "obstruction_pct": pct,
         "risk_tier": tier,
         "blocked_azimuths": blocked_az,
         "horizon_profile": {
@@ -328,7 +453,10 @@ def score_xy(
             "max_horizon_deg": round(float(H.max()), 2),
             "mean_horizon_deg": round(float(H.mean()), 2),
         },
-        "sampled_fraction": round(sampled_fraction, 4),
+        "sampled_fraction": round(prof.sampled_fraction, 4),
+        "near_sampled_fraction": round(prof.near_sampled_fraction, 4),
+        "clearance_margin_m": clearance_margin_m,
+        "surface_provenance": sampler.sample_provenance(x0, y0),
         "dish_height_m": float(mount_height_m),
         "z_surface_m": round(float(z_surf), 2),
     }

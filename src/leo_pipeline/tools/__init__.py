@@ -1178,6 +1178,10 @@ def _resolve_sky_spec(args: dict[str, Any]) -> Any:
             if args.get("earth_curvature") is not None
             else ANALYSIS.earth_curvature
         ),
+        sigma_h_m=float(s.get("sigma_h_m", ANALYSIS.sigma_h_m)),
+        confidence_near_field_m=float(ANALYSIS.confidence_near_field_m),
+        conf_near_sampled_high=float(ANALYSIS.conf_near_sampled_high),
+        conf_near_sampled_med=float(ANALYSIS.conf_near_sampled_med),
     )
 
 
@@ -1250,9 +1254,7 @@ async def compute_sky_obstruction(args: dict[str, Any]) -> dict[str, Any]:
             )
         except Exception as exc:
             return _error(f"scoring failed for {p.get('location_id')!r}: {exc}")
-        conf = horizon.confidence_flag(
-            surface_conf, score.get("sampled_fraction", 0.0), score.get("obstruction_pct") or 0.0, spec
-        )
+        conf = horizon.confidence_for_score(score, spec, surface_confidence=surface_conf)
         results.append(
             {
                 "location_id": p.get("location_id"),
@@ -1261,6 +1263,7 @@ async def compute_sky_obstruction(args: dict[str, Any]) -> dict[str, Any]:
                 "horizon_profile": score["horizon_profile"],
                 "risk_tier": score["risk_tier"],
                 "confidence": conf,
+                "surface_provenance": score.get("surface_provenance"),
                 "dish_height_m": score["dish_height_m"],
             }
         )
@@ -1361,8 +1364,8 @@ async def find_clear_sky_spot(args: dict[str, Any]) -> dict[str, Any]:
                         "obstruction_pct": pct,
                         "improvement_pct": improvement,
                         "risk_tier": score["risk_tier"],
-                        "confidence": horizon.confidence_flag(
-                            surface_conf, score.get("sampled_fraction", 0.0), pct, spec
+                        "confidence": horizon.confidence_for_score(
+                            score, spec, surface_confidence=surface_conf
                         ),
                     }
                 )
