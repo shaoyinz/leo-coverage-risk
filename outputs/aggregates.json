@@ -4,29 +4,29 @@
     "n_findings": 4514477,
     "n_scored": 4514477,
     "tier_counts": {
-      "clear": 4482265,
-      "at_risk": 30341,
-      "severe": 1871,
+      "clear": 4351862,
+      "at_risk": 146203,
+      "severe": 16412,
       "undetermined": 0
     },
     "confidence_counts": {
-      "high": 2271713,
-      "medium": 308616,
-      "low": 1934148
+      "high": 1773800,
+      "medium": 1347722,
+      "low": 1392955
     },
     "undetermined_rate": 0.0,
-    "low_confidence_rate": 0.4284,
-    "at_risk_rate": 0.0071,
+    "low_confidence_rate": 0.3086,
+    "at_risk_rate": 0.036,
     "obstruction_pct": {
       "n": 4514477,
       "min": 0.0,
-      "max": 87.35,
-      "mean": 0.031,
+      "max": 87.85,
+      "mean": 0.177,
       "median": 0.0,
-      "n_distinct": 1867
+      "n_distinct": 2838
     },
     "spec_versions": [
-      "spec-2026.07-mosaic"
+      "spec-2026.07-roof0"
     ]
   },
   "grouped_by": [
@@ -38,1173 +38,1200 @@
       "region": "37119",
       "households": 383211,
       "tier_households": {
-        "at_risk": 7672,
-        "clear": 374921,
-        "severe": 618
-      },
-      "at_risk_households": 8290,
-      "at_risk_rate": 0.0216,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37071",
-      "households": 104085,
-      "tier_households": {
-        "at_risk": 3219,
-        "clear": 100604,
-        "severe": 262
-      },
-      "at_risk_households": 3481,
-      "at_risk_rate": 0.0334,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37067",
-      "households": 157475,
-      "tier_households": {
-        "at_risk": 1632,
-        "clear": 155744,
-        "severe": 99
-      },
-      "at_risk_households": 1731,
-      "at_risk_rate": 0.011,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37097",
-      "households": 87484,
-      "tier_households": {
-        "at_risk": 904,
-        "clear": 86538,
-        "severe": 42
-      },
-      "at_risk_households": 946,
-      "at_risk_rate": 0.0108,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37159",
-      "households": 68371,
-      "tier_households": {
-        "at_risk": 787,
-        "clear": 67537,
-        "severe": 47
-      },
-      "at_risk_households": 834,
-      "at_risk_rate": 0.0122,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37087",
-      "households": 36596,
-      "tier_households": {
-        "at_risk": 795,
-        "clear": 35780,
-        "severe": 21
-      },
-      "at_risk_households": 816,
-      "at_risk_rate": 0.0223,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37045",
-      "households": 44343,
-      "tier_households": {
-        "at_risk": 757,
-        "clear": 43553,
-        "severe": 33
-      },
-      "at_risk_households": 790,
-      "at_risk_rate": 0.0178,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37189",
-      "households": 26296,
-      "tier_households": {
-        "at_risk": 683,
-        "clear": 25580,
-        "severe": 33
-      },
-      "at_risk_households": 716,
-      "at_risk_rate": 0.0272,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37115",
-      "households": 12440,
-      "tier_households": {
-        "at_risk": 643,
-        "clear": 11769,
-        "severe": 28
-      },
-      "at_risk_households": 671,
-      "at_risk_rate": 0.0539,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37035",
-      "households": 74260,
-      "tier_households": {
-        "at_risk": 600,
-        "clear": 73641,
-        "severe": 19
-      },
-      "at_risk_households": 619,
-      "at_risk_rate": 0.0083,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37133",
-      "households": 85732,
-      "tier_households": {
-        "at_risk": 493,
-        "clear": 85131,
-        "severe": 108
-      },
-      "at_risk_households": 601,
-      "at_risk_rate": 0.007,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37057",
-      "households": 81459,
-      "tier_households": {
-        "at_risk": 567,
-        "clear": 80865,
-        "severe": 27
-      },
-      "at_risk_households": 594,
-      "at_risk_rate": 0.0073,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37099",
-      "households": 18201,
-      "tier_households": {
-        "at_risk": 569,
-        "clear": 17610,
-        "severe": 22
-      },
-      "at_risk_households": 591,
-      "at_risk_rate": 0.0325,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37025",
-      "households": 99293,
-      "tier_households": {
-        "at_risk": 547,
-        "clear": 98726,
-        "severe": 20
-      },
-      "at_risk_households": 567,
-      "at_risk_rate": 0.0057,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37179",
-      "households": 97367,
-      "tier_households": {
-        "at_risk": 522,
-        "clear": 96833,
-        "severe": 12
-      },
-      "at_risk_households": 534,
-      "at_risk_rate": 0.0055,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37171",
-      "households": 36967,
-      "tier_households": {
-        "at_risk": 500,
-        "clear": 36452,
-        "severe": 15
-      },
-      "at_risk_households": 515,
-      "at_risk_rate": 0.0139,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37193",
-      "households": 34706,
-      "tier_households": {
-        "at_risk": 483,
-        "clear": 34196,
-        "severe": 27
-      },
-      "at_risk_households": 510,
-      "at_risk_rate": 0.0147,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37127",
-      "households": 48425,
-      "tier_households": {
-        "at_risk": 448,
-        "clear": 47952,
-        "severe": 25
-      },
-      "at_risk_households": 473,
-      "at_risk_rate": 0.0098,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37199",
-      "households": 11200,
-      "tier_households": {
-        "at_risk": 453,
-        "clear": 10728,
-        "severe": 19
-      },
-      "at_risk_households": 472,
-      "at_risk_rate": 0.0421,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37195",
-      "households": 35067,
-      "tier_households": {
-        "at_risk": 443,
-        "clear": 34596,
-        "severe": 28
-      },
-      "at_risk_households": 471,
-      "at_risk_rate": 0.0134,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37021",
-      "households": 123621,
-      "tier_households": {
-        "at_risk": 456,
-        "clear": 123157,
-        "severe": 8
-      },
-      "at_risk_households": 464,
-      "at_risk_rate": 0.0038,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37049",
-      "households": 52739,
-      "tier_households": {
-        "at_risk": 359,
-        "clear": 52366,
-        "severe": 14
-      },
-      "at_risk_households": 373,
-      "at_risk_rate": 0.0071,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37009",
-      "households": 15695,
-      "tier_households": {
-        "at_risk": 337,
-        "clear": 15337,
-        "severe": 21
-      },
-      "at_risk_households": 358,
-      "at_risk_rate": 0.0228,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37101",
-      "households": 100849,
-      "tier_households": {
-        "at_risk": 322,
-        "clear": 100511,
-        "severe": 16
-      },
-      "at_risk_households": 338,
-      "at_risk_rate": 0.0034,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37147",
-      "households": 69350,
-      "tier_households": {
-        "at_risk": 317,
-        "clear": 69018,
-        "severe": 15
-      },
-      "at_risk_households": 332,
-      "at_risk_rate": 0.0048,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37011",
-      "households": 11195,
-      "tier_households": {
-        "at_risk": 294,
-        "clear": 10885,
-        "severe": 16
-      },
-      "at_risk_households": 310,
-      "at_risk_rate": 0.0277,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37167",
-      "households": 30054,
-      "tier_households": {
-        "at_risk": 286,
-        "clear": 29752,
-        "severe": 16
-      },
-      "at_risk_households": 302,
-      "at_risk_rate": 0.01,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37121",
-      "households": 9065,
-      "tier_households": {
-        "at_risk": 274,
-        "clear": 8778,
-        "severe": 13
-      },
-      "at_risk_households": 287,
-      "at_risk_rate": 0.0317,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37169",
-      "households": 23103,
-      "tier_households": {
-        "at_risk": 271,
-        "clear": 22827,
-        "severe": 5
-      },
-      "at_risk_households": 276,
-      "at_risk_rate": 0.0119,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37155",
-      "households": 55933,
-      "tier_households": {
-        "at_risk": 239,
-        "clear": 55686,
-        "severe": 8
-      },
-      "at_risk_households": 247,
-      "at_risk_rate": 0.0044,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37113",
-      "households": 25738,
-      "tier_households": {
-        "at_risk": 231,
-        "clear": 25500,
-        "severe": 7
-      },
-      "at_risk_households": 238,
-      "at_risk_rate": 0.0092,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37059",
-      "households": 21154,
-      "tier_households": {
-        "at_risk": 204,
-        "clear": 20934,
-        "severe": 16
-      },
-      "at_risk_households": 220,
-      "at_risk_rate": 0.0104,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37065",
-      "households": 25350,
-      "tier_households": {
-        "at_risk": 202,
-        "clear": 25130,
-        "severe": 18
-      },
-      "at_risk_households": 220,
-      "at_risk_rate": 0.0087,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37129",
-      "households": 100091,
-      "tier_households": {
-        "at_risk": 206,
-        "clear": 99874,
-        "severe": 11
-      },
-      "at_risk_households": 217,
-      "at_risk_rate": 0.0022,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37107",
-      "households": 29620,
-      "tier_households": {
-        "at_risk": 203,
-        "clear": 29412,
-        "severe": 5
-      },
-      "at_risk_households": 208,
-      "at_risk_rate": 0.007,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37191",
-      "households": 57906,
-      "tier_households": {
-        "at_risk": 196,
-        "clear": 57702,
-        "severe": 8
-      },
-      "at_risk_households": 204,
-      "at_risk_rate": 0.0035,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37013",
-      "households": 27019,
-      "tier_households": {
-        "at_risk": 196,
-        "clear": 26816,
-        "severe": 7
-      },
-      "at_risk_households": 203,
-      "at_risk_rate": 0.0075,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37075",
-      "households": 4693,
-      "tier_households": {
-        "at_risk": 191,
-        "clear": 4493,
-        "severe": 9
-      },
-      "at_risk_households": 200,
-      "at_risk_rate": 0.0426,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37173",
-      "households": 6496,
-      "tier_households": {
-        "at_risk": 190,
-        "clear": 6300,
-        "severe": 6
-      },
-      "at_risk_households": 196,
-      "at_risk_rate": 0.0302,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37005",
-      "households": 6757,
-      "tier_households": {
-        "at_risk": 155,
-        "clear": 6576,
-        "severe": 26
-      },
-      "at_risk_households": 181,
-      "at_risk_rate": 0.0268,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37181",
-      "households": 20640,
-      "tier_households": {
-        "at_risk": 150,
-        "clear": 20476,
-        "severe": 14
-      },
-      "at_risk_households": 164,
-      "at_risk_rate": 0.0079,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37039",
-      "households": 21089,
-      "tier_households": {
-        "at_risk": 132,
-        "clear": 20952,
-        "severe": 5
-      },
-      "at_risk_households": 137,
-      "at_risk_rate": 0.0065,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37197",
-      "households": 19790,
-      "tier_households": {
-        "at_risk": 129,
-        "clear": 19654,
-        "severe": 7
-      },
-      "at_risk_households": 136,
-      "at_risk_rate": 0.0069,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37139",
-      "households": 20024,
-      "tier_households": {
-        "at_risk": 125,
-        "clear": 19890,
-        "severe": 9
-      },
-      "at_risk_households": 134,
-      "at_risk_rate": 0.0067,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37069",
-      "households": 28414,
-      "tier_households": {
-        "at_risk": 128,
-        "clear": 28281,
-        "severe": 5
-      },
-      "at_risk_households": 133,
-      "at_risk_rate": 0.0047,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37083",
-      "households": 25873,
-      "tier_households": {
-        "at_risk": 123,
-        "clear": 25742,
-        "severe": 8
-      },
-      "at_risk_households": 131,
-      "at_risk_rate": 0.0051,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37111",
-      "households": 22513,
-      "tier_households": {
-        "at_risk": 122,
-        "clear": 22385,
-        "severe": 6
-      },
-      "at_risk_households": 128,
-      "at_risk_rate": 0.0057,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37089",
-      "households": 57757,
-      "tier_households": {
-        "at_risk": 114,
-        "clear": 57638,
-        "severe": 5
-      },
-      "at_risk_households": 119,
-      "at_risk_rate": 0.0021,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37007",
-      "households": 10992,
-      "tier_households": {
-        "at_risk": 102,
-        "clear": 10885,
-        "severe": 5
-      },
-      "at_risk_households": 107,
-      "at_risk_rate": 0.0097,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37163",
-      "households": 31068,
-      "tier_households": {
-        "at_risk": 97,
-        "clear": 30965,
-        "severe": 6
-      },
-      "at_risk_households": 103,
-      "at_risk_rate": 0.0033,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37047",
-      "households": 27767,
-      "tier_households": {
-        "at_risk": 89,
-        "clear": 27667,
-        "severe": 11
-      },
-      "at_risk_households": 100,
-      "at_risk_rate": 0.0036,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37185",
-      "households": 11945,
-      "tier_households": {
-        "at_risk": 89,
-        "clear": 11845,
-        "severe": 11
-      },
-      "at_risk_households": 100,
-      "at_risk_rate": 0.0084,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37027",
-      "households": 38788,
-      "tier_households": {
-        "at_risk": 98,
-        "clear": 38689,
-        "severe": 1
-      },
-      "at_risk_households": 99,
-      "at_risk_rate": 0.0026,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37091",
-      "households": 11393,
-      "tier_households": {
-        "at_risk": 94,
-        "clear": 11294,
-        "severe": 5
-      },
-      "at_risk_households": 99,
-      "at_risk_rate": 0.0087,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37117",
-      "households": 11644,
-      "tier_households": {
-        "at_risk": 89,
-        "clear": 11552,
-        "severe": 3
-      },
-      "at_risk_households": 92,
-      "at_risk_rate": 0.0079,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37003",
-      "households": 18046,
-      "tier_households": {
-        "at_risk": 87,
-        "clear": 17955,
-        "severe": 4
-      },
-      "at_risk_households": 91,
-      "at_risk_rate": 0.005,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37055",
-      "households": 21553,
-      "tier_households": {
-        "at_risk": 88,
-        "clear": 21462,
-        "severe": 3
-      },
-      "at_risk_households": 91,
-      "at_risk_rate": 0.0042,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37061",
-      "households": 28023,
-      "tier_households": {
-        "at_risk": 86,
-        "clear": 27932,
-        "severe": 5
-      },
-      "at_risk_households": 91,
-      "at_risk_rate": 0.0032,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37149",
-      "households": 11134,
-      "tier_households": {
-        "at_risk": 85,
-        "clear": 11046,
-        "severe": 3
-      },
-      "at_risk_households": 88,
-      "at_risk_rate": 0.0079,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37141",
-      "households": 32245,
-      "tier_households": {
-        "at_risk": 77,
-        "clear": 32163,
-        "severe": 5
-      },
-      "at_risk_households": 82,
-      "at_risk_rate": 0.0025,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37019",
-      "households": 98183,
-      "tier_households": {
-        "at_risk": 78,
-        "clear": 98102,
-        "severe": 3
-      },
-      "at_risk_households": 81,
-      "at_risk_rate": 0.0008,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37175",
-      "households": 19135,
-      "tier_households": {
-        "at_risk": 78,
-        "clear": 19057
-      },
-      "at_risk_households": 78,
-      "at_risk_rate": 0.0041,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37031",
-      "households": 42555,
-      "tier_households": {
-        "at_risk": 71,
-        "clear": 42481,
-        "severe": 3
-      },
-      "at_risk_households": 74,
-      "at_risk_rate": 0.0017,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37131",
-      "households": 9014,
-      "tier_households": {
-        "at_risk": 59,
-        "clear": 8951,
-        "severe": 4
-      },
-      "at_risk_households": 63,
-      "at_risk_rate": 0.007,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37017",
-      "households": 16856,
-      "tier_households": {
-        "at_risk": 59,
-        "clear": 16794,
-        "severe": 3
-      },
-      "at_risk_households": 62,
-      "at_risk_rate": 0.0037,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37161",
-      "households": 34993,
-      "tier_households": {
-        "at_risk": 52,
-        "clear": 34939,
-        "severe": 2
-      },
-      "at_risk_households": 54,
-      "at_risk_rate": 0.0015,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37015",
-      "households": 8954,
-      "tier_households": {
-        "at_risk": 50,
-        "clear": 8901,
-        "severe": 3
-      },
-      "at_risk_households": 53,
-      "at_risk_rate": 0.0059,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37187",
-      "households": 6257,
-      "tier_households": {
-        "at_risk": 48,
-        "clear": 6206,
-        "severe": 3
-      },
-      "at_risk_households": 51,
-      "at_risk_rate": 0.0082,
+        "at_risk": 22475,
+        "clear": 357149,
+        "severe": 3587
+      },
+      "at_risk_households": 26062,
+      "at_risk_rate": 0.068,
       "undetermined_households": 0
     },
     {
       "region": "37183",
       "households": 435497,
       "tier_households": {
-        "at_risk": 46,
-        "clear": 435449,
-        "severe": 2
+        "at_risk": 16033,
+        "clear": 417340,
+        "severe": 2124
       },
-      "at_risk_households": 48,
-      "at_risk_rate": 0.0001,
+      "at_risk_households": 18157,
+      "at_risk_rate": 0.0417,
       "undetermined_households": 0
     },
     {
-      "region": "37079",
-      "households": 9300,
+      "region": "37071",
+      "households": 104085,
       "tier_households": {
-        "at_risk": 45,
-        "clear": 9255
+        "at_risk": 8643,
+        "clear": 94020,
+        "severe": 1422
       },
-      "at_risk_households": 45,
-      "at_risk_rate": 0.0048,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37109",
-      "households": 43829,
-      "tier_households": {
-        "at_risk": 37,
-        "clear": 43788,
-        "severe": 4
-      },
-      "at_risk_households": 41,
-      "at_risk_rate": 0.0009,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37073",
-      "households": 5277,
-      "tier_households": {
-        "at_risk": 32,
-        "clear": 5242,
-        "severe": 3
-      },
-      "at_risk_households": 35,
-      "at_risk_rate": 0.0066,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37137",
-      "households": 7653,
-      "tier_households": {
-        "at_risk": 31,
-        "clear": 7621,
-        "severe": 1
-      },
-      "at_risk_households": 32,
-      "at_risk_rate": 0.0042,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37023",
-      "households": 40154,
-      "tier_households": {
-        "at_risk": 30,
-        "clear": 40123,
-        "severe": 1
-      },
-      "at_risk_households": 31,
-      "at_risk_rate": 0.0008,
+      "at_risk_households": 10065,
+      "at_risk_rate": 0.0967,
       "undetermined_households": 0
     },
     {
       "region": "37081",
       "households": 198520,
       "tier_households": {
-        "at_risk": 28,
-        "clear": 198489,
-        "severe": 3
+        "at_risk": 8503,
+        "clear": 189105,
+        "severe": 912
       },
-      "at_risk_households": 31,
-      "at_risk_rate": 0.0002,
+      "at_risk_households": 9415,
+      "at_risk_rate": 0.0474,
       "undetermined_households": 0
     },
     {
-      "region": "37041",
-      "households": 7743,
+      "region": "37067",
+      "households": 157475,
       "tier_households": {
-        "at_risk": 28,
-        "clear": 7715
+        "at_risk": 7108,
+        "clear": 149623,
+        "severe": 744
       },
-      "at_risk_households": 28,
-      "at_risk_rate": 0.0036,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37043",
-      "households": 7613,
-      "tier_households": {
-        "at_risk": 28,
-        "clear": 7585
-      },
-      "at_risk_households": 28,
-      "at_risk_rate": 0.0037,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37103",
-      "households": 5368,
-      "tier_households": {
-        "at_risk": 22,
-        "clear": 5346
-      },
-      "at_risk_households": 22,
-      "at_risk_rate": 0.0041,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37053",
-      "households": 14743,
-      "tier_households": {
-        "at_risk": 20,
-        "clear": 14723
-      },
-      "at_risk_households": 20,
-      "at_risk_rate": 0.0014,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37077",
-      "households": 26434,
-      "tier_households": {
-        "at_risk": 14,
-        "clear": 26417,
-        "severe": 3
-      },
-      "at_risk_households": 17,
-      "at_risk_rate": 0.0006,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37157",
-      "households": 47321,
-      "tier_households": {
-        "at_risk": 17,
-        "clear": 47304
-      },
-      "at_risk_households": 17,
-      "at_risk_rate": 0.0004,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37029",
-      "households": 4548,
-      "tier_households": {
-        "at_risk": 11,
-        "clear": 4537
-      },
-      "at_risk_households": 11,
-      "at_risk_rate": 0.0024,
+      "at_risk_households": 7852,
+      "at_risk_rate": 0.0499,
       "undetermined_households": 0
     },
     {
       "region": "37063",
       "households": 115857,
       "tier_households": {
-        "at_risk": 10,
-        "clear": 115846,
-        "severe": 1
+        "at_risk": 5361,
+        "clear": 109966,
+        "severe": 530
       },
-      "at_risk_households": 11,
-      "at_risk_rate": 0.0001,
+      "at_risk_households": 5891,
+      "at_risk_rate": 0.0508,
       "undetermined_households": 0
     },
     {
       "region": "37051",
       "households": 145033,
       "tier_households": {
-        "at_risk": 9,
-        "clear": 145024
+        "at_risk": 5206,
+        "clear": 139300,
+        "severe": 527
       },
-      "at_risk_households": 9,
-      "at_risk_rate": 0.0001,
+      "at_risk_households": 5733,
+      "at_risk_rate": 0.0395,
       "undetermined_households": 0
     },
     {
-      "region": "37123",
-      "households": 13044,
+      "region": "37021",
+      "households": 123621,
       "tier_households": {
-        "at_risk": 7,
-        "clear": 13037
+        "at_risk": 4452,
+        "clear": 118771,
+        "severe": 398
       },
-      "at_risk_households": 7,
-      "at_risk_rate": 0.0005,
+      "at_risk_households": 4850,
+      "at_risk_rate": 0.0392,
       "undetermined_households": 0
     },
     {
-      "region": "37143",
-      "households": 7820,
+      "region": "37097",
+      "households": 87484,
       "tier_households": {
-        "at_risk": 7,
-        "clear": 7813
+        "at_risk": 3659,
+        "clear": 83404,
+        "severe": 421
       },
-      "at_risk_households": 7,
-      "at_risk_rate": 0.0009,
+      "at_risk_households": 4080,
+      "at_risk_rate": 0.0466,
       "undetermined_households": 0
     },
     {
-      "region": "37151",
-      "households": 65787,
+      "region": "37159",
+      "households": 68371,
       "tier_households": {
-        "at_risk": 6,
-        "clear": 65781
+        "at_risk": 3255,
+        "clear": 64787,
+        "severe": 329
       },
-      "at_risk_households": 6,
-      "at_risk_rate": 0.0001,
+      "at_risk_households": 3584,
+      "at_risk_rate": 0.0524,
       "undetermined_households": 0
     },
     {
-      "region": "37033",
-      "households": 11247,
+      "region": "37035",
+      "households": 74260,
       "tier_households": {
-        "at_risk": 5,
-        "clear": 11242
+        "at_risk": 2925,
+        "clear": 71086,
+        "severe": 249
       },
-      "at_risk_households": 5,
-      "at_risk_rate": 0.0004,
+      "at_risk_households": 3174,
+      "at_risk_rate": 0.0427,
       "undetermined_households": 0
     },
     {
-      "region": "37145",
-      "households": 19926,
+      "region": "37057",
+      "households": 81459,
       "tier_households": {
-        "at_risk": 5,
-        "clear": 19921
+        "at_risk": 2858,
+        "clear": 78339,
+        "severe": 262
       },
-      "at_risk_households": 5,
-      "at_risk_rate": 0.0003,
+      "at_risk_households": 3120,
+      "at_risk_rate": 0.0383,
       "undetermined_households": 0
     },
     {
-      "region": "37177",
-      "households": 1872,
+      "region": "37025",
+      "households": 99293,
       "tier_households": {
-        "at_risk": 5,
-        "clear": 1867
+        "at_risk": 2795,
+        "clear": 96280,
+        "severe": 218
       },
-      "at_risk_households": 5,
-      "at_risk_rate": 0.0027,
+      "at_risk_households": 3013,
+      "at_risk_rate": 0.0303,
       "undetermined_households": 0
     },
     {
-      "region": "37095",
-      "households": 2689,
+      "region": "37179",
+      "households": 97367,
       "tier_households": {
-        "at_risk": 4,
-        "clear": 2685
+        "at_risk": 2792,
+        "clear": 94363,
+        "severe": 212
       },
-      "at_risk_households": 4,
-      "at_risk_rate": 0.0015,
+      "at_risk_households": 3004,
+      "at_risk_rate": 0.0309,
       "undetermined_households": 0
     },
     {
-      "region": "37093",
-      "households": 24520,
+      "region": "37045",
+      "households": 44343,
       "tier_households": {
-        "at_risk": 3,
-        "clear": 24517
+        "at_risk": 2464,
+        "clear": 41580,
+        "severe": 299
       },
-      "at_risk_households": 3,
-      "at_risk_rate": 0.0001,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37165",
-      "households": 16062,
-      "tier_households": {
-        "at_risk": 3,
-        "clear": 16059
-      },
-      "at_risk_households": 3,
-      "at_risk_rate": 0.0002,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37135",
-      "households": 61242,
-      "tier_households": {
-        "at_risk": 2,
-        "clear": 61240
-      },
-      "at_risk_households": 2,
-      "at_risk_rate": 0.0,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37037",
-      "households": 39007,
-      "tier_households": {
-        "at_risk": 1,
-        "clear": 39006
-      },
-      "at_risk_households": 1,
-      "at_risk_rate": 0.0,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37085",
-      "households": 64170,
-      "tier_households": {
-        "at_risk": 1,
-        "clear": 64169
-      },
-      "at_risk_households": 1,
-      "at_risk_rate": 0.0,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37105",
-      "households": 28946,
-      "tier_households": {
-        "at_risk": 1,
-        "clear": 28945
-      },
-      "at_risk_households": 1,
-      "at_risk_rate": 0.0,
-      "undetermined_households": 0
-    },
-    {
-      "region": "37125",
-      "households": 53774,
-      "tier_households": {
-        "at_risk": 1,
-        "clear": 53773
-      },
-      "at_risk_households": 1,
-      "at_risk_rate": 0.0,
+      "at_risk_households": 2763,
+      "at_risk_rate": 0.0623,
       "undetermined_households": 0
     },
     {
       "region": "37001",
       "households": 81780,
       "tier_households": {
-        "clear": 81780
+        "at_risk": 2132,
+        "clear": 79459,
+        "severe": 189
       },
-      "at_risk_households": 0,
-      "at_risk_rate": 0.0,
+      "at_risk_households": 2321,
+      "at_risk_rate": 0.0284,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37087",
+      "households": 36596,
+      "tier_households": {
+        "at_risk": 1962,
+        "clear": 34448,
+        "severe": 186
+      },
+      "at_risk_households": 2148,
+      "at_risk_rate": 0.0587,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37171",
+      "households": 36967,
+      "tier_households": {
+        "at_risk": 1885,
+        "clear": 34873,
+        "severe": 209
+      },
+      "at_risk_households": 2094,
+      "at_risk_rate": 0.0566,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37189",
+      "households": 26296,
+      "tier_households": {
+        "at_risk": 1790,
+        "clear": 24306,
+        "severe": 200
+      },
+      "at_risk_households": 1990,
+      "at_risk_rate": 0.0757,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37193",
+      "households": 34706,
+      "tier_households": {
+        "at_risk": 1654,
+        "clear": 32892,
+        "severe": 160
+      },
+      "at_risk_households": 1814,
+      "at_risk_rate": 0.0523,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37101",
+      "households": 100849,
+      "tier_households": {
+        "at_risk": 1560,
+        "clear": 99150,
+        "severe": 139
+      },
+      "at_risk_households": 1699,
+      "at_risk_rate": 0.0168,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37127",
+      "households": 48425,
+      "tier_households": {
+        "at_risk": 1502,
+        "clear": 46738,
+        "severe": 185
+      },
+      "at_risk_households": 1687,
+      "at_risk_rate": 0.0348,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37135",
+      "households": 61242,
+      "tier_households": {
+        "at_risk": 1500,
+        "clear": 59563,
+        "severe": 179
+      },
+      "at_risk_households": 1679,
+      "at_risk_rate": 0.0274,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37195",
+      "households": 35067,
+      "tier_households": {
+        "at_risk": 1370,
+        "clear": 33510,
+        "severe": 187
+      },
+      "at_risk_households": 1557,
+      "at_risk_rate": 0.0444,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37147",
+      "households": 69350,
+      "tier_households": {
+        "at_risk": 1382,
+        "clear": 67838,
+        "severe": 130
+      },
+      "at_risk_households": 1512,
+      "at_risk_rate": 0.0218,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37133",
+      "households": 85732,
+      "tier_households": {
+        "at_risk": 1316,
+        "clear": 84253,
+        "severe": 163
+      },
+      "at_risk_households": 1479,
+      "at_risk_rate": 0.0173,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37089",
+      "households": 57757,
+      "tier_households": {
+        "at_risk": 1350,
+        "clear": 56279,
+        "severe": 128
+      },
+      "at_risk_households": 1478,
+      "at_risk_rate": 0.0256,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37167",
+      "households": 30054,
+      "tier_households": {
+        "at_risk": 1325,
+        "clear": 28608,
+        "severe": 121
+      },
+      "at_risk_households": 1446,
+      "at_risk_rate": 0.0481,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37049",
+      "households": 52739,
+      "tier_households": {
+        "at_risk": 1304,
+        "clear": 51304,
+        "severe": 131
+      },
+      "at_risk_households": 1435,
+      "at_risk_rate": 0.0272,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37099",
+      "households": 18201,
+      "tier_households": {
+        "at_risk": 1218,
+        "clear": 16878,
+        "severe": 105
+      },
+      "at_risk_households": 1323,
+      "at_risk_rate": 0.0727,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37169",
+      "households": 23103,
+      "tier_households": {
+        "at_risk": 1138,
+        "clear": 21844,
+        "severe": 121
+      },
+      "at_risk_households": 1259,
+      "at_risk_rate": 0.0545,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37151",
+      "households": 65787,
+      "tier_households": {
+        "at_risk": 1014,
+        "clear": 64645,
+        "severe": 128
+      },
+      "at_risk_households": 1142,
+      "at_risk_rate": 0.0174,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37115",
+      "households": 12440,
+      "tier_households": {
+        "at_risk": 1064,
+        "clear": 11302,
+        "severe": 74
+      },
+      "at_risk_households": 1138,
+      "at_risk_rate": 0.0915,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37191",
+      "households": 57906,
+      "tier_households": {
+        "at_risk": 957,
+        "clear": 56862,
+        "severe": 87
+      },
+      "at_risk_households": 1044,
+      "at_risk_rate": 0.018,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37155",
+      "households": 55933,
+      "tier_households": {
+        "at_risk": 942,
+        "clear": 54919,
+        "severe": 72
+      },
+      "at_risk_households": 1014,
+      "at_risk_rate": 0.0181,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37059",
+      "households": 21154,
+      "tier_households": {
+        "at_risk": 911,
+        "clear": 20153,
+        "severe": 90
+      },
+      "at_risk_households": 1001,
+      "at_risk_rate": 0.0473,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37113",
+      "households": 25738,
+      "tier_households": {
+        "at_risk": 913,
+        "clear": 24738,
+        "severe": 87
+      },
+      "at_risk_households": 1000,
+      "at_risk_rate": 0.0389,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37199",
+      "households": 11200,
+      "tier_households": {
+        "at_risk": 879,
+        "clear": 10234,
+        "severe": 87
+      },
+      "at_risk_households": 966,
+      "at_risk_rate": 0.0862,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37129",
+      "households": 100091,
+      "tier_households": {
+        "at_risk": 901,
+        "clear": 99134,
+        "severe": 56
+      },
+      "at_risk_households": 957,
+      "at_risk_rate": 0.0096,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37013",
+      "households": 27019,
+      "tier_households": {
+        "at_risk": 797,
+        "clear": 26149,
+        "severe": 73
+      },
+      "at_risk_households": 870,
+      "at_risk_rate": 0.0322,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37009",
+      "households": 15695,
+      "tier_households": {
+        "at_risk": 787,
+        "clear": 14846,
+        "severe": 62
+      },
+      "at_risk_households": 849,
+      "at_risk_rate": 0.0541,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37107",
+      "households": 29620,
+      "tier_households": {
+        "at_risk": 774,
+        "clear": 28782,
+        "severe": 64
+      },
+      "at_risk_households": 838,
+      "at_risk_rate": 0.0283,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37065",
+      "households": 25350,
+      "tier_households": {
+        "at_risk": 726,
+        "clear": 24540,
+        "severe": 84
+      },
+      "at_risk_households": 810,
+      "at_risk_rate": 0.032,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37197",
+      "households": 19790,
+      "tier_households": {
+        "at_risk": 624,
+        "clear": 19107,
+        "severe": 59
+      },
+      "at_risk_households": 683,
+      "at_risk_rate": 0.0345,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37011",
+      "households": 11195,
+      "tier_households": {
+        "at_risk": 627,
+        "clear": 10515,
+        "severe": 53
+      },
+      "at_risk_households": 680,
+      "at_risk_rate": 0.0607,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37019",
+      "households": 98183,
+      "tier_households": {
+        "at_risk": 635,
+        "clear": 97513,
+        "severe": 35
+      },
+      "at_risk_households": 670,
+      "at_risk_rate": 0.0068,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37069",
+      "households": 28414,
+      "tier_households": {
+        "at_risk": 581,
+        "clear": 27783,
+        "severe": 50
+      },
+      "at_risk_households": 631,
+      "at_risk_rate": 0.0222,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37027",
+      "households": 38788,
+      "tier_households": {
+        "at_risk": 564,
+        "clear": 38179,
+        "severe": 45
+      },
+      "at_risk_households": 609,
+      "at_risk_rate": 0.0157,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37175",
+      "households": 19135,
+      "tier_households": {
+        "at_risk": 545,
+        "clear": 18545,
+        "severe": 45
+      },
+      "at_risk_households": 590,
+      "at_risk_rate": 0.0308,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37121",
+      "households": 9065,
+      "tier_households": {
+        "at_risk": 545,
+        "clear": 8480,
+        "severe": 40
+      },
+      "at_risk_households": 585,
+      "at_risk_rate": 0.0645,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37181",
+      "households": 20640,
+      "tier_households": {
+        "at_risk": 497,
+        "clear": 20069,
+        "severe": 74
+      },
+      "at_risk_households": 571,
+      "at_risk_rate": 0.0277,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37039",
+      "households": 21089,
+      "tier_households": {
+        "at_risk": 525,
+        "clear": 20526,
+        "severe": 38
+      },
+      "at_risk_households": 563,
+      "at_risk_rate": 0.0267,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37003",
+      "households": 18046,
+      "tier_households": {
+        "at_risk": 520,
+        "clear": 17489,
+        "severe": 37
+      },
+      "at_risk_households": 557,
+      "at_risk_rate": 0.0309,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37023",
+      "households": 40154,
+      "tier_households": {
+        "at_risk": 506,
+        "clear": 39603,
+        "severe": 45
+      },
+      "at_risk_households": 551,
+      "at_risk_rate": 0.0137,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37083",
+      "households": 25873,
+      "tier_households": {
+        "at_risk": 491,
+        "clear": 25332,
+        "severe": 50
+      },
+      "at_risk_households": 541,
+      "at_risk_rate": 0.0209,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37085",
+      "households": 64170,
+      "tier_households": {
+        "at_risk": 489,
+        "clear": 63634,
+        "severe": 47
+      },
+      "at_risk_households": 536,
+      "at_risk_rate": 0.0084,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37139",
+      "households": 20024,
+      "tier_households": {
+        "at_risk": 474,
+        "clear": 19496,
+        "severe": 54
+      },
+      "at_risk_households": 528,
+      "at_risk_rate": 0.0264,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37007",
+      "households": 10992,
+      "tier_households": {
+        "at_risk": 481,
+        "clear": 10468,
+        "severe": 43
+      },
+      "at_risk_households": 524,
+      "at_risk_rate": 0.0477,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37125",
+      "households": 53774,
+      "tier_households": {
+        "at_risk": 494,
+        "clear": 53256,
+        "severe": 24
+      },
+      "at_risk_households": 518,
+      "at_risk_rate": 0.0096,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37163",
+      "households": 31068,
+      "tier_households": {
+        "at_risk": 480,
+        "clear": 30553,
+        "severe": 35
+      },
+      "at_risk_households": 515,
+      "at_risk_rate": 0.0166,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37109",
+      "households": 43829,
+      "tier_households": {
+        "at_risk": 469,
+        "clear": 43324,
+        "severe": 36
+      },
+      "at_risk_households": 505,
+      "at_risk_rate": 0.0115,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37111",
+      "households": 22513,
+      "tier_households": {
+        "at_risk": 470,
+        "clear": 22014,
+        "severe": 29
+      },
+      "at_risk_households": 499,
+      "at_risk_rate": 0.0222,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37157",
+      "households": 47321,
+      "tier_households": {
+        "at_risk": 433,
+        "clear": 46834,
+        "severe": 54
+      },
+      "at_risk_households": 487,
+      "at_risk_rate": 0.0103,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37005",
+      "households": 6757,
+      "tier_households": {
+        "at_risk": 389,
+        "clear": 6288,
+        "severe": 80
+      },
+      "at_risk_households": 469,
+      "at_risk_rate": 0.0694,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37047",
+      "households": 27767,
+      "tier_households": {
+        "at_risk": 407,
+        "clear": 27312,
+        "severe": 48
+      },
+      "at_risk_households": 455,
+      "at_risk_rate": 0.0164,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37031",
+      "households": 42555,
+      "tier_households": {
+        "at_risk": 424,
+        "clear": 42102,
+        "severe": 29
+      },
+      "at_risk_households": 453,
+      "at_risk_rate": 0.0106,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37037",
+      "households": 39007,
+      "tier_households": {
+        "at_risk": 411,
+        "clear": 38557,
+        "severe": 39
+      },
+      "at_risk_households": 450,
+      "at_risk_rate": 0.0115,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37061",
+      "households": 28023,
+      "tier_households": {
+        "at_risk": 396,
+        "clear": 27583,
+        "severe": 44
+      },
+      "at_risk_households": 440,
+      "at_risk_rate": 0.0157,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37105",
+      "households": 28946,
+      "tier_households": {
+        "at_risk": 400,
+        "clear": 28512,
+        "severe": 34
+      },
+      "at_risk_households": 434,
+      "at_risk_rate": 0.015,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37173",
+      "households": 6496,
+      "tier_households": {
+        "at_risk": 415,
+        "clear": 6062,
+        "severe": 19
+      },
+      "at_risk_households": 434,
+      "at_risk_rate": 0.0668,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37161",
+      "households": 34993,
+      "tier_households": {
+        "at_risk": 387,
+        "clear": 34573,
+        "severe": 33
+      },
+      "at_risk_households": 420,
+      "at_risk_rate": 0.012,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37075",
+      "households": 4693,
+      "tier_households": {
+        "at_risk": 345,
+        "clear": 4320,
+        "severe": 28
+      },
+      "at_risk_households": 373,
+      "at_risk_rate": 0.0795,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37091",
+      "households": 11393,
+      "tier_households": {
+        "at_risk": 321,
+        "clear": 11031,
+        "severe": 41
+      },
+      "at_risk_households": 362,
+      "at_risk_rate": 0.0318,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37185",
+      "households": 11945,
+      "tier_households": {
+        "at_risk": 315,
+        "clear": 11588,
+        "severe": 42
+      },
+      "at_risk_households": 357,
+      "at_risk_rate": 0.0299,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37117",
+      "households": 11644,
+      "tier_households": {
+        "at_risk": 301,
+        "clear": 11311,
+        "severe": 32
+      },
+      "at_risk_households": 333,
+      "at_risk_rate": 0.0286,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37149",
+      "households": 11134,
+      "tier_households": {
+        "at_risk": 297,
+        "clear": 10805,
+        "severe": 32
+      },
+      "at_risk_households": 329,
+      "at_risk_rate": 0.0295,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37141",
+      "households": 32245,
+      "tier_households": {
+        "at_risk": 299,
+        "clear": 31924,
+        "severe": 22
+      },
+      "at_risk_households": 321,
+      "at_risk_rate": 0.01,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37017",
+      "households": 16856,
+      "tier_households": {
+        "at_risk": 300,
+        "clear": 16536,
+        "severe": 20
+      },
+      "at_risk_households": 320,
+      "at_risk_rate": 0.019,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37077",
+      "households": 26434,
+      "tier_households": {
+        "at_risk": 263,
+        "clear": 26144,
+        "severe": 27
+      },
+      "at_risk_households": 290,
+      "at_risk_rate": 0.011,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37131",
+      "households": 9014,
+      "tier_households": {
+        "at_risk": 237,
+        "clear": 8754,
+        "severe": 23
+      },
+      "at_risk_households": 260,
+      "at_risk_rate": 0.0288,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37015",
+      "households": 8954,
+      "tier_households": {
+        "at_risk": 238,
+        "clear": 8698,
+        "severe": 18
+      },
+      "at_risk_households": 256,
+      "at_risk_rate": 0.0286,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37055",
+      "households": 21553,
+      "tier_households": {
+        "at_risk": 230,
+        "clear": 21307,
+        "severe": 16
+      },
+      "at_risk_households": 246,
+      "at_risk_rate": 0.0114,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37079",
+      "households": 9300,
+      "tier_households": {
+        "at_risk": 213,
+        "clear": 9076,
+        "severe": 11
+      },
+      "at_risk_households": 224,
+      "at_risk_rate": 0.0241,
       "undetermined_households": 0
     },
     {
       "region": "37153",
       "households": 22090,
       "tier_households": {
-        "clear": 22090
+        "at_risk": 179,
+        "clear": 21892,
+        "severe": 19
       },
-      "at_risk_households": 0,
-      "at_risk_rate": 0.0,
+      "at_risk_households": 198,
+      "at_risk_rate": 0.009,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37187",
+      "households": 6257,
+      "tier_households": {
+        "at_risk": 171,
+        "clear": 6067,
+        "severe": 19
+      },
+      "at_risk_households": 190,
+      "at_risk_rate": 0.0304,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37043",
+      "households": 7613,
+      "tier_households": {
+        "at_risk": 180,
+        "clear": 7425,
+        "severe": 8
+      },
+      "at_risk_households": 188,
+      "at_risk_rate": 0.0247,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37137",
+      "households": 7653,
+      "tier_households": {
+        "at_risk": 172,
+        "clear": 7468,
+        "severe": 13
+      },
+      "at_risk_households": 185,
+      "at_risk_rate": 0.0242,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37123",
+      "households": 13044,
+      "tier_households": {
+        "at_risk": 166,
+        "clear": 12866,
+        "severe": 12
+      },
+      "at_risk_households": 178,
+      "at_risk_rate": 0.0136,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37053",
+      "households": 14743,
+      "tier_households": {
+        "at_risk": 151,
+        "clear": 14585,
+        "severe": 7
+      },
+      "at_risk_households": 158,
+      "at_risk_rate": 0.0107,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37041",
+      "households": 7743,
+      "tier_households": {
+        "at_risk": 129,
+        "clear": 7604,
+        "severe": 10
+      },
+      "at_risk_households": 139,
+      "at_risk_rate": 0.018,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37093",
+      "households": 24520,
+      "tier_households": {
+        "at_risk": 119,
+        "clear": 24390,
+        "severe": 11
+      },
+      "at_risk_households": 130,
+      "at_risk_rate": 0.0053,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37073",
+      "households": 5277,
+      "tier_households": {
+        "at_risk": 102,
+        "clear": 5157,
+        "severe": 18
+      },
+      "at_risk_households": 120,
+      "at_risk_rate": 0.0227,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37145",
+      "households": 19926,
+      "tier_households": {
+        "at_risk": 96,
+        "clear": 19815,
+        "severe": 15
+      },
+      "at_risk_households": 111,
+      "at_risk_rate": 0.0056,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37103",
+      "households": 5368,
+      "tier_households": {
+        "at_risk": 87,
+        "clear": 5275,
+        "severe": 6
+      },
+      "at_risk_households": 93,
+      "at_risk_rate": 0.0173,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37165",
+      "households": 16062,
+      "tier_households": {
+        "at_risk": 86,
+        "clear": 15969,
+        "severe": 7
+      },
+      "at_risk_households": 93,
+      "at_risk_rate": 0.0058,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37029",
+      "households": 4548,
+      "tier_households": {
+        "at_risk": 73,
+        "clear": 4471,
+        "severe": 4
+      },
+      "at_risk_households": 77,
+      "at_risk_rate": 0.0169,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37143",
+      "households": 7820,
+      "tier_households": {
+        "at_risk": 58,
+        "clear": 7757,
+        "severe": 5
+      },
+      "at_risk_households": 63,
+      "at_risk_rate": 0.0081,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37033",
+      "households": 11247,
+      "tier_households": {
+        "at_risk": 51,
+        "clear": 11193,
+        "severe": 3
+      },
+      "at_risk_households": 54,
+      "at_risk_rate": 0.0048,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37177",
+      "households": 1872,
+      "tier_households": {
+        "at_risk": 25,
+        "clear": 1844,
+        "severe": 3
+      },
+      "at_risk_households": 28,
+      "at_risk_rate": 0.015,
+      "undetermined_households": 0
+    },
+    {
+      "region": "37095",
+      "households": 2689,
+      "tier_households": {
+        "at_risk": 11,
+        "clear": 2676,
+        "severe": 2
+      },
+      "at_risk_households": 13,
+      "at_risk_rate": 0.0048,
       "undetermined_households": 0
     }
   ],
@@ -1213,12 +1240,12 @@
       "region": "37",
       "households": 4674917,
       "tier_households": {
-        "at_risk": 30904,
-        "clear": 4642103,
-        "severe": 1910
+        "at_risk": 152476,
+        "clear": 4505017,
+        "severe": 17424
       },
-      "at_risk_households": 32814,
-      "at_risk_rate": 0.007,
+      "at_risk_households": 169900,
+      "at_risk_rate": 0.0363,
       "undetermined_households": 0,
       "state_name": "North Carolina"
     }
