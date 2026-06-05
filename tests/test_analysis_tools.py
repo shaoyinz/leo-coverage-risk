@@ -95,7 +95,16 @@ def test_confidence_flag_provenance_drives_base():
     spec = horizon.SkySpec()
     assert horizon.confidence_flag("lidar", 1.0, 50.0, 0.0, spec) == "high"
     assert horizon.confidence_flag("pseudo", 1.0, 50.0, 0.0, spec) == "medium"
+    # a building-set (DEM+building) pixel is modelled, not measured -> medium, like canopy fill
+    assert horizon.confidence_flag("structure", 1.0, 50.0, 0.0, spec) == "medium"
     assert horizon.confidence_flag("dem_fill", 1.0, 50.0, 0.0, spec) == "low"
+
+
+def test_provenance_label_includes_structure_code_4():
+    """The A2 building-fusion provenance code (4) round-trips to the 'structure' label so the
+    sampler/QA can attribute a point's surface height to a building."""
+    assert horizon.PROVENANCE_CODES["structure"] == 4
+    assert horizon.PROVENANCE_LABELS[4] == "structure"
 
 
 def test_confidence_flag_open_sky_is_not_penalised():

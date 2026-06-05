@@ -21,7 +21,7 @@ import json
 import pandas as pd
 
 import leo_pipeline.tools as tools
-from leo_pipeline.config import PATHS
+from leo_pipeline.config import INGESTION, PATHS
 from leo_pipeline.tiling import TILES_FILE
 
 # A small, real work-list tile in central/eastern NC (~321 unique coords). Used as the default
@@ -66,20 +66,24 @@ def tile_bbox(tile_id: str) -> list[float]:
     return [float(r.min_lon), float(r.min_lat), float(r.max_lon), float(r.max_lat)]
 
 
-async def build_surface(tile_id: str, bbox: list[float], *, verbose: bool = True) -> dict:
+async def build_surface(
+    tile_id: str, bbox: list[float], *, verbose: bool = True, with_buildings: bool = True
+) -> dict:
     """A2, deterministically: resolve real COGs for the tile and composite them into a cached,
     gap-filled mosaic DSM (band 1 elevation + band 2 per-pixel provenance).
 
     Resolves each input in ``SURFACE_INPUTS`` and hands every one that resolved to
     ``fetch_aligned_surface`` in a single manifest, letting it auto-pick the best mode
     (``mosaic`` when both lidar + DEM are present) — exactly the judgement the A2 ingestion
-    agent makes. ``fetch_aligned_surface`` is idempotent + content-addressed, so a re-run with
-    an existing cache entry is a no-op.
+    agent makes. When ``with_buildings`` (default), an OpenBuildingMap ``buildings`` factor is
+    added so building heights fuse into the modelled-fill (non-lidar) regions of the surface.
+    ``fetch_aligned_surface`` is idempotent + content-addressed, so a re-run with an existing
+    cache entry is a no-op.
     """
     # Resolve EVERY intersecting granule per source (not just the best one) so a tile that
     # straddles a 1° granule boundary gets full coverage once fetch_aligned_surface mosaics
     # them — otherwise the DEM base is full of holes and those points score 'undetermined'.
-    manifest: dict[str, list[str]] = {}
+    manifest: dict[str, list[str] | str] = {}
     for collection, factor in SURFACE_INPUTS:
         hrefs = tools._search_item_hrefs(collection, bbox)
         if verbose:
@@ -89,6 +93,13 @@ async def build_surface(tile_id: str, bbox: list[float], *, verbose: bool = True
             manifest[factor] = hrefs
     if not manifest:
         raise RuntimeError("no surface inputs resolved — check network access to the COG hosts")
+    # OpenBuildingMap is vector GeoParquet resolved per-tile inside fetch_aligned_surface (from
+    # the bbox's quadkey), so the manifest carries the source marker, not a STAC href. A remote
+    # OBM failure is swallowed downstream — buildings are opportunistic, never required.
+    if with_buildings:
+        manifest["buildings"] = INGESTION.building_source_url
+        if verbose:
+            print(f"  [obm ] buildings        -> {INGESTION.building_source_url}")
 
     env, surf = await _call(
         tools.fetch_aligned_surface,
@@ -103,7 +114,11 @@ async def build_surface(tile_id: str, bbox: list[float], *, verbose: bool = True
     return surf
 
 
-def build_surface_sync(tile_id: str, bbox: list[float], *, verbose: bool = True) -> dict:
+def build_surface_sync(
+    tile_id: str, bbox: list[float], *, verbose: bool = True, with_buildings: bool = True
+) -> dict:
     """Blocking wrapper around :func:`build_surface` for non-async callers (the full-run
     driver's process-pool workers run one tile per ``asyncio.run``)."""
-    return asyncio.run(build_surface(tile_id, bbox, verbose=verbose))
+    return asyncio.run(
+        build_surface(tile_id, bbox, verbose=verbose, with_buildings=with_buildings)
+    )

@@ -30,15 +30,23 @@ on Microsoft Planetary Computer (`pc`) or an off-catalog web source.
 | **terrain (global fallback)** | **NASADEM** (`nasadem`) | terrain | 30 m | 60°N–56°S | 2000 (SRTM epoch) | public domain (NASA) | `pc` STAC |
 | **canopy** | **Meta / WRI High-Res Canopy Height** | tree-canopy **height** | **~1 m** | near-global | 2009–2020 composite | CC-BY-4.0 | **web** (AWS Open Data) |
 | **canopy (alt)** | **ETH Global Canopy Height 2020** | tree-canopy **height** | 10 m | global | 2020 | CC-BY-4.0 | **web** (Zenodo/GEE) |
-| **buildings** | **MS Global ML Building Footprints** (`ms-buildings`) | structure footprints | vector (some heights) | global | 2022 | ODbL (attribution) | `pc` STAC |
+| **buildings (preferred)** | **OpenBuildingMap** (GFZ/GEM) | footprints **+ per-building height/storeys** (GEM taxonomy; height from GHSL Built-up 2023A) | vector (GeoParquet, level-6 quadkey grid) | global, US-covered | 2024-07 OSM snapshot | ODbL (attribution) | **web** (source.coop GeoParquet) |
 | **buildings (alt)** | **Overture Maps buildings** | footprints **+ heights** | vector | global | rolling | CDLA-Permissive 2.0 | web (S3/Azure) |
+| **buildings (alt)** | **MS Global ML Building Footprints** (`ms-buildings`) | structure footprints | vector (some heights) | global | 2022 | ODbL (attribution) | `pc` STAC |
 
 **Why these and not others.**
 
 - **Surface first, then synthesise.** A 1 m lidar DSM already fuses terrain+canopy+structures,
   so it is the single best input where it exists — but US 3DEP lidar is patchy, so off-lidar
-  we synthesise a pseudo-DSM `= DEM + max(canopy height, building height)`. That is why we
-  source the three component layers (terrain, canopy, buildings) in addition to the DSM.
+  the mosaic/pseudo-DSM fill synthesises `= DEM + max(canopy height, building height)`. That is
+  why we source the three component layers (terrain, canopy, buildings) in addition to the DSM.
+  **Building height is now fused** (it was a deferred gap): OpenBuildingMap's per-building
+  height is rasterized onto the tile grid and fused into the non-lidar fill, so building
+  obstruction is modelled where lidar is absent — see
+  [`_rasterize_building_window`](../src/leo_pipeline/tools/__init__.py) and the per-pixel
+  provenance code `structure`(4). OBM is read anonymously over HTTPS as cloud-native GeoParquet
+  (one file per level-6 quadkey), so no bulk download or extra dependency is needed. **Cite:**
+  OpenBuildingMap, GFZ/GEM (ODbL); *From Footprints to Functions*, Scientific Data (2025).
 - **Canopy is off-catalog and that's expected.** No Planetary Computer collection carries
   tree-canopy **height** (verified: 134 collections, none canopy-height), and Meta's
   dataset publishes **no STAC endpoint** either — so the agent sources it via

@@ -85,7 +85,7 @@ class SurfaceSampler:
             self.nodata = float(src.nodata) if src.nodata is not None else -9999.0
             self.gsd_m = float(abs(src.transform.a))
             # Band 2 (when present) is the A2 per-pixel provenance code (0 nodata / 1 dem_fill
-            # / 2 dem+canopy / 3 lidar). Single-band test/legacy surfaces have no band 2.
+            # / 2 dem+canopy / 3 lidar / 4 dem+building). Single-band surfaces have no band 2.
             self.provenance = src.read(2).astype("int16") if src.count >= 2 else None
         self.height, self.width = self.array.shape
         self._inv = ~self.transform
@@ -141,8 +141,8 @@ class SurfaceSampler:
 
     def sample_provenance(self, x: float, y: float) -> str | None:
         """Nearest-pixel provenance label of the surface under metric ``(x, y)`` — which data
-        source the elevation came from (``lidar`` / ``pseudo`` / ``dem_fill``). ``None`` when
-        the surface has no provenance band (legacy single-band) or the point is off-grid."""
+        source the elevation came from (``lidar`` / ``pseudo`` / ``structure`` / ``dem_fill``).
+        ``None`` when the surface has no provenance band or the point is off-grid."""
         if self.provenance is None:
             return None
         col = int(round(self._inv.a * x + self._inv.b * y + self._inv.c - 0.5))
@@ -154,8 +154,8 @@ class SurfaceSampler:
 
 # Per-pixel provenance codes written to DSM band 2 by A2's fetch_aligned_surface, and their
 # labels. Shared by the writer (tools) and the reader (sampler) so the two never drift.
-PROVENANCE_CODES = {"nodata": 0, "dem_fill": 1, "pseudo": 2, "lidar": 3}
-PROVENANCE_LABELS = {0: None, 1: "dem_fill", 2: "pseudo", 3: "lidar"}
+PROVENANCE_CODES = {"nodata": 0, "dem_fill": 1, "pseudo": 2, "lidar": 3, "structure": 4}
+PROVENANCE_LABELS = {0: None, 1: "dem_fill", 2: "pseudo", 3: "lidar", 4: "structure"}
 
 
 # --- horizon geometry ----------------------------------------------------------------
@@ -309,9 +309,11 @@ def classify_tier(pct: float, spec: SkySpec) -> str:
 
 
 # Provenance code (DSM band 2) → the confidence the *data under the point* warrants. A lidar
-# pixel carries canopy+buildings (trustworthy); a DEM+canopy pixel is modelled, not measured;
-# a bare-DEM fill pixel cannot see trees/structures at all, so a verdict there is coarse.
-_PROVENANCE_BASE = {"lidar": "high", "pseudo": "medium", "dem_fill": "low", "dem": "low"}
+# pixel carries canopy+buildings (trustworthy); a DEM+canopy or DEM+building pixel is modelled,
+# not measured (medium); a bare-DEM fill pixel cannot see trees/structures at all (coarse).
+_PROVENANCE_BASE = {
+    "lidar": "high", "pseudo": "medium", "structure": "medium", "dem_fill": "low", "dem": "low"
+}
 
 
 def confidence_flag(

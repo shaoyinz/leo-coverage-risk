@@ -368,7 +368,7 @@ def test_fetch_read_failure_suggests_next_fallback(redirect_ingestion, monkeypat
         ),
         (
             {"tile_id": "T", "bbox": [-80, 35, -79, 36], "manifest": {"dem": "x"}, "surface_mode": "pseudo_dsm"},
-            "needs manifest factor(s) ['canopy']",
+            "needs a canopy and/or buildings layer",
         ),
     ],
 )
@@ -463,6 +463,172 @@ def test_cache_rw_validates_op(redirect_ingestion):
     assert "op must be" in text
 
 
+# --- building-height fusion (OpenBuildingMap) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, metres",
+    [
+        ("HHT:15.00", 15.0),          # explicit metres
+        ("H:2", 6.0),                 # 2 storeys * 3 m
+        ("HAPP:3", 9.0),              # approximate storeys
+        ("HBET:1-5", 9.0),            # storey range -> midpoint 3 storeys * 3 m
+        ("HBET:1-3", 6.0),
+        ("H:1+HHT:3.50", 3.5),        # compound -> explicit metres win
+        ("garbage", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_parse_gem_height_variants(raw, metres):
+    got = tools._parse_gem_height(raw)
+    if metres is None:
+        assert got is None
+    else:
+        assert got == pytest.approx(metres)
+
+
+def test_bbox_quadkeys_charlotte_single_tile():
+    # Charlotte uptown sits inside one level-6 quadkey tile (matches the live OBM file name).
+    assert tools._bbox_quadkeys([-80.86, 35.21, -80.82, 35.25], 6) == ["032003"]
+    assert tools._tile_to_quadkey(*tools._lonlat_to_tile(-80.84, 35.23, 6), 6) == "032003"
+
+
+def test_building_source_urls_templates_quadkey():
+    urls = tools._building_source_urls([-80.86, 35.21, -80.82, 35.25])
+    assert urls == [
+        "https://data.source.coop/tge-labs/openbuildingmap/building.032003.parquet"
+    ]
+
+
+def test_rasterize_building_window_burns_max_height_on_dst_grid(monkeypatch):
+    """OBM footprints rasterize onto the exact ``_dst_grid`` grid, tallest-wins on overlap,
+    nodata where no building — the read itself is monkeypatched (no network)."""
+    from shapely.geometry import box as shp_box
+
+    bbox = [-80.84, 35.23, -80.83, 35.24]
+    minx, miny, maxx, maxy = bbox
+    short = shp_box(minx, miny, minx + 0.006, maxy).wkb       # left two-thirds, 5 m
+    tall = shp_box(minx, miny, minx + 0.003, maxy).wkb        # left third (overlaps), 30 m
+    monkeypatch.setattr(
+        tools, "_read_obm_features",
+        lambda urls, bb: [(short, "HHT:5.00"), (tall, "HHT:30.00")],
+    )
+
+    out = tools._rasterize_building_window(bbox, "EPSG:32617", 10.0, urls=["x"])
+    tr, w, h, _ = tools._dst_grid(bbox, "EPSG:32617", 10.0)
+    assert out["shape"] == [h, w]
+    assert out["transform"] == tr  # bit-identical grid -> fuses with the COG reads
+
+    arr = out["array"]
+    assert np.isclose(arr, 30.0).any()                       # overlap -> tallest wins
+    assert np.isclose(arr, 5.0).any()                        # short-only middle band
+    assert (arr == out["nodata"]).any()                      # right third has no building
+
+
+def test_composite_surface_fuses_buildings_max_and_provenance_4():
+    """Modelled fill is DEM + max(canopy, building); a building-set pixel is code 4, a
+    canopy-set pixel code 2."""
+    nd = -9999.0
+    dem = _read([[100.0, 100.0], [100.0, 100.0]])
+    canopy = _read([[5.0, nd], [8.0, 2.0]])
+    bld = _read([[20.0, 15.0], [nd, 1.0]])
+    elev, prov = tools._composite_surface(
+        {"terrain": dem, "canopy": canopy, "buildings": bld}, nd
+    )
+    # (0,0) max(5,20)=20 ->120 building; (0,1) canopy nodata, bld15 ->115 building
+    # (1,0) bld nodata, canopy8 ->108 canopy;  (1,1) max(2,1)=2 ->102 canopy
+    assert elev.tolist() == [[120.0, 115.0], [108.0, 102.0]]
+    assert prov.tolist() == [[4, 4], [2, 2]]
+
+
+def _fake_bld_layer(value=30.0, shape=(4, 4), nd=-9999.0):
+    from rasterio.transform import from_bounds
+
+    return lambda bbox, crs, gsd, urls=None: {
+        "array": np.full(shape, float(value), dtype="float32"),
+        "transform": from_bounds(0, 0, shape[1] * 10, shape[0] * 10, shape[1], shape[0]),
+        "crs": "EPSG:32617",
+        "nodata": nd,
+        "gsd_m": 10.0,
+        "shape": list(shape),
+    }
+
+
+def test_fetch_mosaic_fuses_buildings_into_dem_fill(redirect_ingestion, monkeypatch):
+    """Buildings fuse into the DEM-fill (non-lidar) region of a mosaic: lidar still wins where
+    present, the rest is DEM + building (code 4), and the building share is reported."""
+    nd = -9999.0
+
+    def _fake_read(href, bbox, crs, gsd):
+        if "dem" in href or "terrain" in href:
+            return _win(100.0)
+        holes = [(r, c) for r in range(4) for c in range(4) if not (r < 2 and c < 2)]
+        return _win(150.0, holes=holes)  # lidar only top-left 2x2
+
+    monkeypatch.setattr(tools, "_sign_href", lambda h: h)
+    monkeypatch.setattr(tools, "_read_window_reprojected", _fake_read)
+    monkeypatch.setattr(tools, "_rasterize_building_window", _fake_bld_layer(30.0))
+
+    env, payload = _fetch(
+        {
+            "tile_id": "MB",
+            "bbox": [-80, 35, -79, 36],
+            "manifest": {"surface": "http://dsm", "dem": "http://dem", "buildings": "obm://x"},
+        }
+    )
+    assert not env.get("is_error")
+    assert payload["surface_mode"] == "mosaic"
+    fr = payload["provenance_fractions"]
+    assert fr["lidar"] == pytest.approx(0.25)       # top-left 2x2 still lidar
+    assert fr["building"] == pytest.approx(0.75)    # the DEM-fill region now carries buildings
+
+    import rasterio
+
+    with rasterio.open(payload["dsm_uri"]) as ds:
+        elev = ds.read(1)
+        prov = ds.read(2).astype(int)
+    assert np.isclose(elev[0, 0], 150.0)            # lidar wins where present
+    assert np.isclose(elev[2, 2], 130.0)            # DEM 100 + building 30
+    assert prov[2, 2] == 4
+
+
+def test_fetch_building_read_failure_degrades_gracefully(
+    redirect_ingestion, patch_reads, monkeypatch
+):
+    """A failed OBM read drops the building term but keeps the tile (buildings are opportunistic)."""
+    def _boom(*a, **k):
+        raise RuntimeError("obm unreachable")
+
+    monkeypatch.setattr(tools, "_rasterize_building_window", _boom)
+    env, payload = _fetch(
+        {
+            "tile_id": "BD",
+            "bbox": [-80, 35, -79, 36],
+            "manifest": {
+                "dem": "http://dem", "canopy": "http://canopy", "buildings": "obm://x"
+            },
+            "surface_mode": "pseudo_dsm",
+        }
+    )
+    assert not env.get("is_error")                  # tile survives the building failure
+    assert payload["provenance_fractions"]["building"] == pytest.approx(0.0)
+    assert payload["provenance_fractions"]["pseudo"] == pytest.approx(1.0)
+
+
+def test_cache_key_tracks_building_inputs():
+    base = ("32617_1_2", [-80, 35, -79, 36])
+    no_b = tools._cache_key(
+        *base, {"terrain": "http://d", "buildings": None}, "EPSG:32617", 10.0, "mosaic"
+    )
+    with_b = tools._cache_key(
+        *base,
+        {"terrain": "http://d", "buildings": ["obm://building.032003.parquet"]},
+        "EPSG:32617", 10.0, "mosaic",
+    )
+    assert no_b != with_b  # building inputs change the surface -> change the cache key
+
+
 # --- opt-in live read ----------------------------------------------------------------
 
 RUN_LIVE = os.getenv("LEO_RUN_LIVE") == "1"
@@ -497,3 +663,16 @@ def test_live_fetch_reads_real_dem_window(redirect_ingestion):
     with rasterio.open(payload["dsm_uri"]) as ds:
         assert ds.crs.to_epsg() // 100 == 326  # a UTM-north zone
         assert ds.read(1).size > 0
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not RUN_LIVE, reason="set LEO_RUN_LIVE=1 for the live OBM read")
+def test_live_rasterize_building_window_charlotte():
+    """Read real OpenBuildingMap footprints over an uptown-Charlotte box and rasterize heights
+    onto the tile grid (exercises the live DuckDB HTTPS GeoParquet read end to end)."""
+    bbox = [-80.86, 35.21, -80.82, 35.25]
+    out = tools._rasterize_building_window(bbox, "EPSG:32617", 10.0)
+    arr = out["array"]
+    built = arr[arr != out["nodata"]]
+    assert built.size > 0, "no OBM buildings rasterized over uptown Charlotte"
+    assert built.max() > 10.0  # uptown has tall structures (parsed metres/storeys)

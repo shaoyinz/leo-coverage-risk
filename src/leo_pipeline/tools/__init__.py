@@ -588,6 +588,28 @@ def _cache_key(
     return hashlib.sha1(payload.encode()).hexdigest()[:16]
 
 
+def _dst_grid(
+    bbox4326: list[float], dst_crs: str, dst_gsd_m: float
+) -> tuple[Any, int, int, tuple[float, float, float, float]]:
+    """The fixed destination grid covering ``bbox4326`` in ``dst_crs`` at ``dst_gsd_m``.
+
+    Derived from ``(bbox4326, dst_crs, dst_gsd_m)`` alone so every layer built with the same
+    arguments — a reprojected COG window OR a rasterized building footprint — lands on a
+    *bit-identical* grid and fuses pixel-for-pixel. Returns ``(transform, width, height,
+    (w, s, e, n))`` (bounds in ``dst_crs``).
+    """
+    from rasterio.transform import from_bounds as transform_from_bounds
+    from rasterio.warp import transform_bounds
+
+    dst_w, dst_s, dst_e, dst_n = transform_bounds(
+        "EPSG:4326", dst_crs, *bbox4326, densify_pts=21
+    )
+    width = max(1, int(math.ceil((dst_e - dst_w) / dst_gsd_m)))
+    height = max(1, int(math.ceil((dst_n - dst_s) / dst_gsd_m)))
+    dst_transform = transform_from_bounds(dst_w, dst_s, dst_e, dst_n, width, height)
+    return dst_transform, width, height, (dst_w, dst_s, dst_e, dst_n)
+
+
 def _read_window_reprojected(
     href: str, bbox4326: list[float], dst_crs: str, dst_gsd_m: float
 ) -> dict[str, Any]:
@@ -595,23 +617,17 @@ def _read_window_reprojected(
 
     Reads only the source window overlapping the AOI (COG range requests via GDAL), then
     reprojects it to ``dst_crs`` at ``dst_gsd_m`` resolution. The destination grid is
-    derived deterministically from ``(bbox4326, dst_crs, dst_gsd_m)`` alone, so two layers
-    fetched with the same arguments land on an *identical* grid and can be fused
+    derived deterministically from ``(bbox4326, dst_crs, dst_gsd_m)`` (via :func:`_dst_grid`),
+    so two layers fetched with the same arguments land on an *identical* grid and can be fused
     pixel-for-pixel. Isolated as a module-level helper so offline tests stub it with small
     synthetic arrays (no network). Returns the array + georeferencing + nodata.
     """
     import numpy as np
     import rasterio
-    from rasterio.transform import from_bounds as transform_from_bounds
     from rasterio.warp import Resampling, reproject, transform_bounds
 
     with rasterio.open(href) as src:
-        dst_w, dst_s, dst_e, dst_n = transform_bounds(
-            "EPSG:4326", dst_crs, *bbox4326, densify_pts=21
-        )
-        width = max(1, int(math.ceil((dst_e - dst_w) / dst_gsd_m)))
-        height = max(1, int(math.ceil((dst_n - dst_s) / dst_gsd_m)))
-        dst_transform = transform_from_bounds(dst_w, dst_s, dst_e, dst_n, width, height)
+        dst_transform, width, height, _ = _dst_grid(bbox4326, dst_crs, dst_gsd_m)
         nodata = src.nodata if src.nodata is not None else -9999.0
 
         src_w, src_s, src_e, src_n = transform_bounds(
@@ -676,6 +692,187 @@ def _read_window_mosaic(
     return base
 
 
+# --- Building-height layer (OpenBuildingMap) ------------------------------------------------
+# OBM is vector GeoParquet, not a COG, so it gets its own read path: pick the level-6 quadkey
+# file(s) covering the tile, pull building polygons + a GEM-taxonomy height string within the
+# bbox (anonymous HTTPS via DuckDB), parse the height to metres, and rasterize onto the SAME
+# (bbox, crs, gsd) grid the COG reads use so it composites pixel-for-pixel. Building height is
+# the modelled obstruction term OUTSIDE lidar coverage (the lidar DSM already carries roofs).
+
+
+def _lonlat_to_tile(lon: float, lat: float, zoom: int) -> tuple[int, int]:
+    """Web-Mercator slippy tile (x, y) containing ``(lon, lat)`` at ``zoom``."""
+    n = 2 ** zoom
+    x = int((float(lon) + 180.0) / 360.0 * n)
+    lat_rad = math.radians(float(lat))
+    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    return min(max(x, 0), n - 1), min(max(y, 0), n - 1)
+
+
+def _tile_to_quadkey(x: int, y: int, zoom: int) -> str:
+    """Bing/OBM quadkey string for slippy tile ``(x, y)`` at ``zoom``."""
+    out = []
+    for i in range(zoom, 0, -1):
+        mask = 1 << (i - 1)
+        digit = (1 if x & mask else 0) + (2 if y & mask else 0)
+        out.append(str(digit))
+    return "".join(out)
+
+
+def _bbox_quadkeys(bbox4326: list[float], zoom: int) -> list[str]:
+    """Every level-``zoom`` quadkey tile covering ``bbox4326`` (the OBM file granularity)."""
+    minx, miny, maxx, maxy = [float(v) for v in bbox4326]
+    x0, y0 = _lonlat_to_tile(minx, maxy, zoom)  # NW corner -> smallest (x, y)
+    x1, y1 = _lonlat_to_tile(maxx, miny, zoom)  # SE corner -> largest (x, y)
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in range(min(x0, x1), max(x0, x1) + 1):
+        for y in range(min(y0, y1), max(y0, y1) + 1):
+            qk = _tile_to_quadkey(x, y, zoom)
+            if qk not in seen:
+                seen.add(qk)
+                out.append(qk)
+    return out
+
+
+def _building_source_urls(bbox4326: list[float]) -> list[str]:
+    """OBM GeoParquet URL(s) for the quadkey file(s) covering the tile bbox."""
+    zoom = INGESTION.building_quadkey_zoom
+    return [
+        INGESTION.building_source_url.format(quadkey=qk)
+        for qk in _bbox_quadkeys(bbox4326, zoom)
+    ]
+
+
+def _parse_gem_height(raw: Any) -> float | None:
+    """GEM-taxonomy ``height`` string -> metres (or None when unusable).
+
+    OBM encodes height as e.g. ``"HHT:99.95"`` (explicit metres — strongest), ``"H:2"`` /
+    ``"HAPP:2"`` (storey count), ``"HBET:1-3"`` (storey range), compound parts joined by ``+``
+    (e.g. ``"H:1+HHT:3.50"``). Explicit metres win; otherwise storeys * meters_per_level. An
+    ``HBET`` range collapses to its midpoint (avoids over-stating the tall end). Result is
+    clamped to a plausibility range.
+    """
+    if not raw:
+        return None
+    metres: float | None = None
+    storeys: float | None = None
+    for tok in str(raw).split("+"):
+        tag, sep, val = tok.strip().partition(":")
+        if not sep:
+            continue
+        tag, val = tag.strip().upper(), val.strip()
+        try:
+            if tag == "HHT":
+                metres = float(val)
+            elif tag in ("H", "HAPP"):
+                storeys = float(val)
+            elif tag == "HBET":
+                lo, _, hi = val.partition("-")
+                storeys = (float(lo) + float(hi)) / 2.0 if hi else float(lo)
+        except ValueError:
+            continue
+    if metres is None and storeys is not None:
+        metres = storeys * INGESTION.meters_per_level
+    if metres is None:
+        return None
+    lo, hi = INGESTION.building_height_clamp
+    return float(min(max(metres, lo), hi))
+
+
+def _read_obm_features(urls: list[str], bbox4326: list[float]) -> list[tuple[Any, Any]]:
+    """Read OBM building polygons + GEM height string within ``bbox4326`` from ``urls``.
+
+    Anonymous HTTPS GeoParquet via DuckDB (``spatial`` + ``httpfs``), pre-filtered on the
+    parquet's own ``bbox`` struct so only intersecting rows decode. Returns ``(wkb, height)``
+    per building. Isolated + network-only so tests monkeypatch it with synthetic WKB (mirrors
+    how ``_read_window_reprojected`` is stubbed). A missing quadkey file (ocean/edge) or a
+    transient remote error skips that granule — buildings are opportunistic, never required.
+    """
+    import warnings
+
+    import duckdb
+
+    minx, miny, maxx, maxy = [float(v) for v in bbox4326]
+    gc, hc, bc = (
+        INGESTION.building_geom_col,
+        INGESTION.building_height_col,
+        INGESTION.building_bbox_col,
+    )
+    con = duckdb.connect()
+    con.execute(
+        "INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs; SET s3_region='us-west-2';"
+    )
+    rows: list[tuple[Any, Any]] = []
+    for url in urls:
+        try:
+            rows.extend(
+                con.execute(
+                    f"SELECT ST_AsWKB({gc}) AS wkb, {hc} AS h FROM read_parquet('{url}') "
+                    f"WHERE {bc}.xmin <= {maxx} AND {bc}.xmax >= {minx} "
+                    f"AND {bc}.ymin <= {maxy} AND {bc}.ymax >= {miny} AND {hc} IS NOT NULL"
+                ).fetchall()
+            )
+        except Exception as exc:  # missing granule / transient remote error -> skip
+            warnings.warn(f"OBM read skipped for {url}: {exc}")
+    con.close()
+    return rows
+
+
+def _rasterize_building_window(
+    bbox4326: list[float],
+    dst_crs: str,
+    dst_gsd_m: float,
+    urls: list[str] | None = None,
+) -> dict[str, Any]:
+    """Rasterize OBM building heights onto the tile's destination grid.
+
+    Same return shape as :func:`_read_window_reprojected` (``{array, transform, crs, nodata,
+    gsd_m, shape}``) so it drops straight into the surface composite. Footprints are reprojected
+    to ``dst_crs`` and burned (tallest-wins on overlap) onto the :func:`_dst_grid` grid; pixels
+    with no building stay nodata (contribute 0 height — a conservative *clear* lean, matching how
+    absent canopy is treated).
+    """
+    import numpy as np
+    from rasterio.features import rasterize
+    from rasterio.warp import transform_geom
+    from shapely import wkb as shapely_wkb
+    from shapely.geometry import mapping
+
+    nodata = -9999.0
+    dst_transform, width, height, _ = _dst_grid(bbox4326, dst_crs, dst_gsd_m)
+    if urls is None:
+        urls = _building_source_urls(bbox4326)
+    rows = _read_obm_features(urls, bbox4326)
+
+    shapes: list[tuple[Any, float]] = []
+    for wkb_bytes, hstr in rows:
+        h = _parse_gem_height(hstr)
+        if h is None or h <= 0.0:
+            continue
+        try:
+            geom = shapely_wkb.loads(bytes(wkb_bytes))
+        except Exception:
+            continue
+        if geom.is_empty:
+            continue
+        shapes.append((transform_geom("EPSG:4326", dst_crs, mapping(geom)), float(h)))
+
+    arr = np.full((height, width), nodata, dtype="float32")
+    if shapes:
+        # rasterio has no MAX merge; burn shortest-first so the tallest building wins each pixel.
+        shapes.sort(key=lambda s: s[1])
+        rasterize(shapes, out=arr, transform=dst_transform)
+    return {
+        "array": arr,
+        "transform": dst_transform,
+        "crs": str(dst_crs),
+        "nodata": nodata,
+        "gsd_m": float(dst_gsd_m),
+        "shape": [height, width],
+    }
+
+
 def _fuse_pseudo_dsm(
     dem: Any, canopy: Any, dem_nodata: float, canopy_nodata: float
 ) -> Any:
@@ -684,9 +881,11 @@ def _fuse_pseudo_dsm(
     Where canopy is nodata it contributes 0 (bare earth — a conservative *clear* lean,
     consistent with treating absent obstruction data as no obstruction). Where the DEM
     itself is nodata the result is nodata (no terrain datum, nothing to build on).
-    Buildings are DEFERRED in this live core: the building term is omitted, so a
-    pseudo-DSM here is DEM + canopy only — documented as a known gap (see the agent prompt
-    and docs/architecture.md "what this repo implements").
+
+    NOTE: the live surface build goes through :func:`_composite_surface`, which fuses
+    DEM + max(canopy, building) (buildings from OpenBuildingMap). This canopy-only helper is
+    retained for the simple two-layer case and as a reference; the building term is wired in
+    the composite, not here.
     """
     import numpy as np
 
@@ -708,19 +907,23 @@ def _composite_surface(
     Builds one surface by layering the aligned reads, lowest-trust first so higher-trust data
     overwrites it (architecture §5, surface fallback as a *mosaic* not a whole-tile choice):
 
-        bare DEM (code 1)  →  DEM + max(canopy, 0) (code 2)  →  lidar DSM (code 3)
+        bare DEM (code 1)  →  DEM + max(canopy, building, 0) (codes 2/4)  →  lidar DSM (code 3)
 
-    DEM is globally complete, so the result has full coverage even where the lidar is patchy —
-    which is what stops a partial lidar tile from leaving ~half its points ``undetermined``.
-    Each input is ``{"array", "nodata"}`` (or absent). Returns ``(elev, provenance)`` aligned to
-    the same grid; ``provenance`` is 0 where no source had a value (genuinely no datum).
+    The modelled-fill step fuses DEM + max(canopy, building) where either obstruction layer is
+    present; the pixel is tagged code 4 when a building set the height (structure-influenced,
+    auditable) and code 2 when canopy did. DEM is globally complete, so the result has full
+    coverage even where the lidar is patchy — which is what stops a partial lidar tile from
+    leaving ~half its points ``undetermined``. Each input is ``{"array", "nodata"}`` (or absent).
+    Returns ``(elev, provenance)`` aligned to the same grid; ``provenance`` is 0 where no source
+    had a value (genuinely no datum).
     """
     import numpy as np
 
     dem = layers.get("terrain")
     lidar = layers.get("surface")
     canopy = layers.get("canopy")
-    ref = dem or lidar or canopy
+    building = layers.get("buildings")
+    ref = dem or lidar or canopy or building
     shape = np.asarray(ref["array"]).shape
     elev = np.full(shape, nodata, dtype="float32")
     prov = np.zeros(shape, dtype="int16")
@@ -730,17 +933,27 @@ def _composite_surface(
         nd = float(layer.get("nodata", nodata))
         return arr, np.isfinite(arr) & (arr != nd)
 
+    def _height(layer: Any) -> tuple[Any, Any]:
+        """Non-negative obstruction height + validity mask for a layer (zeros when absent)."""
+        if layer is None:
+            return np.zeros(shape, dtype="float32"), np.zeros(shape, dtype=bool)
+        arr, ok = _valid(layer)
+        return np.where(ok, np.maximum(arr, 0.0), 0.0), ok
+
     # 1) bare DEM (lowest trust, but complete coverage)
     if dem is not None:
         dem_arr, dem_ok = _valid(dem)
         elev = np.where(dem_ok, dem_arr, elev)
         prov = np.where(dem_ok, 1, prov)
-        # 2) DEM + canopy where both present → modelled surface
-        if canopy is not None:
-            can_arr, can_ok = _valid(canopy)
-            both = dem_ok & can_ok
-            elev = np.where(both, dem_arr + np.maximum(can_arr, 0.0), elev)
-            prov = np.where(both, 2, prov)
+        # 2/4) modelled surface: DEM + max(canopy, building) where either obstruction is present.
+        if canopy is not None or building is not None:
+            can_h, can_ok = _height(canopy)
+            bld_h, bld_ok = _height(building)
+            have_obs = dem_ok & (can_ok | bld_ok)
+            elev = np.where(have_obs, dem_arr + np.maximum(can_h, bld_h), elev)
+            prov = np.where(have_obs, 2, prov)
+            # code 4 where a building set the height (building present and >= canopy).
+            prov = np.where(have_obs & bld_ok & (bld_h >= can_h), 4, prov)
     # 3) lidar DSM overrides wherever it has a real value (already carries canopy + buildings)
     if lidar is not None:
         li_arr, li_ok = _valid(lidar)
@@ -751,16 +964,22 @@ def _composite_surface(
 
 
 def _provenance_fractions(prov: Any) -> dict[str, float]:
-    """Share of pixels from each source (for the sidecar / QA) — counts only real datum pixels."""
+    """Share of pixels from each source (for the sidecar / QA) — counts only real datum pixels.
+
+    ``building`` is the modelled-fill pixels where a building set the height (code 4); ``pseudo``
+    is canopy-set modelled fill (code 2). Both are DEM+obstruction; the split makes the building
+    contribution auditable.
+    """
     import numpy as np
 
     prov = np.asarray(prov)
     total = int((prov > 0).sum())
     if total == 0:
-        return {"lidar": 0.0, "pseudo": 0.0, "dem_fill": 0.0}
+        return {"lidar": 0.0, "pseudo": 0.0, "building": 0.0, "dem_fill": 0.0}
     return {
         "lidar": round(float((prov == 3).sum()) / total, 4),
         "pseudo": round(float((prov == 2).sum()) / total, 4),
+        "building": round(float((prov == 4).sum()) / total, 4),
         "dem_fill": round(float((prov == 1).sum()) / total, 4),
     }
 
@@ -839,11 +1058,13 @@ def _coverage_and_confidence(surface_mode: str, valid_frac: float) -> tuple[str,
     "fetch_aligned_surface",
     "Build ONE aligned elevation surface for a tile from the H1-approved datasets: read "
     "the COG window(s) covering the tile bbox, reproject to a metric CRS, and either pass "
-    "through a true lidar DSM or fuse DEM + canopy into a pseudo-DSM. Deterministic, "
+    "through a true lidar DSM or fuse DEM + max(canopy, building) into a pseudo-DSM/mosaic. "
+    "Buildings (OpenBuildingMap) fuse opportunistically into the mosaic/pseudo_dsm fill where "
+    "the manifest carries a 'buildings' factor. Deterministic, "
     "cached and idempotent (re-running a tile with unchanged inputs is a no-op). You do "
     "NOT score risk here. `tile_id` names the cache entry; `bbox` is "
     "[min_lon,min_lat,max_lon,max_lat] in EPSG:4326; `manifest` maps obstruction factor -> "
-    "asset href (keys: surface/dsm, terrain/dem, canopy; values are hrefs or "
+    "asset href (keys: surface/dsm, terrain/dem, canopy, buildings; values are hrefs or "
     "{asset_href,vintage}); `target_crs` defaults to 'auto-UTM' (the tile's UTM zone); "
     "`target_gsd_m` is the output resolution (default 10); `surface_mode` is one of "
     "true_dsm|pseudo_dsm|cover_proxy (omit to auto-pick the best the manifest supports). "
@@ -888,6 +1109,7 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
     dsm = layers.get("surface")
     dem = layers.get("terrain")
     canopy = layers.get("canopy")
+    buildings = layers.get("buildings")
 
     # Auto-pick the best mode the manifest can actually support, if not told one. ``mosaic`` is
     # the new best: lidar over a DEM base so coverage is complete (no partial-lidar holes →
@@ -899,7 +1121,7 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
         surface_mode = "mosaic"
     elif dsm:
         surface_mode = "true_dsm"
-    elif dem and canopy:
+    elif dem and (canopy or buildings):
         surface_mode = "pseudo_dsm"
     elif dem:
         surface_mode = "cover_proxy"
@@ -910,12 +1132,21 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
         )
 
     # Confirm the chosen mode has its required layers; if not, point at the next fallback.
+    # pseudo_dsm needs terrain + at least ONE obstruction layer (canopy and/or building); the
+    # obstruction layers fuse opportunistically (read below), so only terrain is hard-required.
     need = {
         "mosaic": ["surface", "terrain"],
         "true_dsm": ["surface"],
-        "pseudo_dsm": ["terrain", "canopy"],
+        "pseudo_dsm": ["terrain"],
         "cover_proxy": ["terrain"],
     }[surface_mode]
+    if surface_mode == "pseudo_dsm" and not (canopy or buildings):
+        nxt = _next_surface_mode(surface_mode)
+        hint = f" try surface_mode={nxt!r}" if nxt else ""
+        return _error(
+            "surface_mode='pseudo_dsm' needs a canopy and/or buildings layer to fuse onto the "
+            f"DEM, not provided.{hint}"
+        )
     missing = [f for f in need if f not in layers]
     if missing:
         nxt = _next_surface_mode(surface_mode)
@@ -927,10 +1158,18 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
 
     target_crs = _resolve_target_crs(args.get("target_crs"), bbox)
 
+    # Buildings (OpenBuildingMap) fuse opportunistically into the modelled-fill of the mosaic and
+    # pseudo-DSM surfaces — the non-lidar regions where roofs would otherwise be invisible (the
+    # lidar DSM already carries them). Resolve the actual quadkey file URL(s) so the cache key
+    # tracks the building data read, not just the template marker in the manifest.
+    use_buildings = buildings is not None and surface_mode in ("mosaic", "pseudo_dsm")
+    building_urls = _building_source_urls(bbox) if use_buildings else None
+
     href_map = {
         "surface": dsm["hrefs"] if dsm else None,
         "terrain": dem["hrefs"] if dem else None,
         "canopy": canopy["hrefs"] if canopy else None,
+        "buildings": building_urls,
     }
     key = _cache_key(tile_id, bbox, href_map, target_crs, target_gsd_m, surface_mode)
     cache_dir = INGESTION.cache_dir
@@ -946,13 +1185,14 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass  # corrupt sidecar -> fall through and recompute
 
-    vintage_map = {f: layers[f].get("vintage") for f in need}
-
-    # Read every layer the mode draws on (mosaic uses canopy too when the manifest carries it),
-    # all onto the same (bbox, crs, gsd)-derived grid so they composite pixel-for-pixel.
+    # Read every layer the mode draws on — the mosaic and pseudo-DSM fill both fuse canopy when
+    # the manifest carries it — all onto the same (bbox, crs, gsd)-derived grid so they composite
+    # pixel-for-pixel. The raster COG factors go through the windowed-read path; buildings (OBM
+    # vector) are rasterized below.
     read_factors = list(need)
-    if surface_mode == "mosaic" and "canopy" in layers:
+    if surface_mode in ("mosaic", "pseudo_dsm") and "canopy" in layers:
         read_factors.append("canopy")
+    vintage_map = {f: layers[f].get("vintage") for f in read_factors}
     try:
         reads = {
             f: _read_window_mosaic(
@@ -967,6 +1207,19 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
             f"read/reproject failed for surface_mode={surface_mode!r} on tile {tile_id}: "
             f"{exc}.{hint}"
         )
+
+    # Buildings are an opportunistic enhancement: a failed/empty OBM read drops the building term
+    # and keeps the tile (the surface is still valid without it), rather than failing the tile.
+    if use_buildings:
+        try:
+            bld = _rasterize_building_window(bbox, target_crs, target_gsd_m, urls=building_urls)
+            if bld is not None and bool((bld["array"] != bld["nodata"]).any()):
+                reads["buildings"] = bld
+                vintage_map["buildings"] = buildings.get("vintage")
+        except Exception as exc:  # OBM remote/parse error -> degrade gracefully
+            import warnings
+
+            warnings.warn(f"building layer skipped for tile {tile_id}: {exc}")
 
     ref = reads.get("terrain") or reads.get("surface") or reads.get("canopy")
     nodata = ref["nodata"]

@@ -108,6 +108,22 @@ class Discovery:
             ],
             "buildings": [
                 {
+                    "name": "OpenBuildingMap (GFZ/GEM)",
+                    "registry_id": None,  # source.coop / Taylor Geospatial, not the AWS registry
+                    "registry_url": "https://www.openbuildingmap.org/",
+                    "s3_uri": "s3://us-west-2.opendata.source.coop/tge-labs/openbuildingmap/",
+                    "gsd_m": None,
+                    "vintage": "2024-07 (OSM snapshot); GHSL 2023A heights",
+                    "license": "ODbL-1.0",
+                    "description": (
+                        "Global building footprints + per-building HEIGHT/storeys (GEM taxonomy; "
+                        "height from GHSL Built-up 2023A), US-covered. Cloud-native GeoParquet on "
+                        "a level-6 quadkey grid (building.<quadkey>.parquet) — the fused building "
+                        "term in A2's pseudo-DSM/mosaic surface."
+                    ),
+                    "keywords": ["building", "height", "storeys", "obm", "openbuildingmap", "gem"],
+                },
+                {
                     "name": "Overture Maps Foundation",
                     "registry_id": "overturemaps",
                     "registry_url": "https://registry.opendata.aws/overturemaps/",
@@ -162,6 +178,27 @@ class Ingestion:
     # Sign Planetary Computer asset hrefs at download time (the unsigned hrefs A1 persists
     # in the manifest are short-lived to sign, so signing belongs here in A2, not A1).
     sign_assets: bool = True
+
+    # --- Building-height fusion (OpenBuildingMap) -------------------------------------------
+    # OBM (GFZ/GEM, ODbL) is the building term fused into the pseudo-DSM/mosaic-fill surface so
+    # building obstruction is modelled OUTSIDE lidar coverage (lidar DSM already carries roofs).
+    # Cloud-native GeoParquet on a level-6 quadkey grid, one file per tile, read anonymously over
+    # HTTPS (no creds, no s3fs) and bbox-pre-filtered via the parquet's own ``bbox`` struct column.
+    # ``{quadkey}`` is filled with each level-``building_quadkey_zoom`` tile covering the AOI bbox.
+    building_source_url: str = (
+        "https://data.source.coop/tge-labs/openbuildingmap/building.{quadkey}.parquet"
+    )
+    building_quadkey_zoom: int = 6
+    # OBM columns (verified against the live parquet): GEOMETRY (OGC:CRS84) + a GEM-taxonomy
+    # ``height`` VARCHAR ("HHT:<m>" explicit metres, "H:<n>"/"HBET:<lo>-<hi>"/"HAPP:<n>" storeys,
+    # compound joined by "+") + a ``bbox`` struct for the cheap spatial pre-filter.
+    building_geom_col: str = "geometry"
+    building_height_col: str = "height"
+    building_bbox_col: str = "bbox"
+    # Storeys → metres when only a storey count/range is given (no explicit HHT metres).
+    meters_per_level: float = 3.0
+    # Plausibility clamp on a parsed building height (metres); guards against junk encodings.
+    building_height_clamp: tuple[float, float] = (0.0, 500.0)
 
 
 @dataclass(frozen=True)
