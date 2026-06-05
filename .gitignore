@@ -34,6 +34,8 @@ outputs/*
 !outputs/coverage_map.html
 !outputs/locations.pmtiles
 
+docs/walkthrough/*
+
 # Notebooks
 .ipynb_checkpoints/
 
