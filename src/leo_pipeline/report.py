@@ -234,7 +234,7 @@ def run_tippecanoe(
         "tippecanoe", "-o", str(pmtiles_path), "--force",
         "-l", report.map_layer_name,
         "-Z", str(report.map_min_zoom), "-z", str(report.map_max_zoom),
-        "-r1", "--cluster-distance=8",  # drop-densest-as-needed alternative: keep all but cluster
+        "-r1", "--cluster-distance=8",  # thin dense low-zoom points; keep all (no rate drop)
         str(geojson_path),
     ]
     try:
@@ -254,15 +254,20 @@ def maplibre_html(
     title: str = "LEO coverage-risk map",
     report: Reporting = REPORTING,
     aggregates: Mapping[str, Any] | None = None,
+    counties_filename: str | None = None,
 ) -> str:
     """A self-contained MapLibre + PMTiles viewer: satellite basemap + DEM terrain/hillshade/sky,
-    a circle layer coloured by ``risk_tier``, click popups, a toggleable legend, and **state +
+    a point layer coloured by ``risk_tier``, click popups, a toggleable legend, and **state +
     county filter dropdowns** that combine with the tier toggles. Pure string — no I/O — so it
     stays unit testable and the PMTiles file is referenced by a relative path next to the HTML.
 
     ``aggregates`` (the county/state rollup) supplies the dropdown options: ``states`` ->
     ``state`` choices, ``counties`` -> ``county`` choices (labelled via ``COUNTY_FIPS_NAMES``,
-    falling back to the raw FIPS). With no ``aggregates`` the panel shows only the "All" rows."""
+    falling back to the raw FIPS). With no ``aggregates`` the panel shows only the "All" rows.
+
+    ``counties_filename`` (a GeoJSON of county polygons next to the HTML, e.g.
+    ``nc_counties.geojson``) adds a county-boundary line overlay and highlights the county chosen
+    in the dropdown; omit it (the file may be absent offline) to skip the overlay."""
     colors = report.tier_colors
     match_expr = ["match", ["get", "risk_tier"]]
     for tier, color in colors.items():
@@ -292,6 +297,26 @@ def maplibre_html(
         f'<option value="{fips}" data-state="{fips[:2]}">{name} ({fips})</option>'
         for fips, name in county_labelled
     )
+
+    # County-boundary overlay (added only when a GeoJSON file is supplied). GEOID is the 5-digit
+    # county FIPS, matching the dropdown values, so the selected county can be highlighted. No
+    # text labels — that would pull in an external glyph source (a single point of failure that
+    # aborts all vector rendering if it 404s), and the county names are already in the dropdown.
+    if counties_filename:
+        county_setup_js = f"""
+    map.addSource("counties", {{ type: "geojson", data: "./{counties_filename}" }});
+    map.addLayer({{ id: "county-line", type: "line", source: "counties",
+      paint: {{ "line-color": "#ffffff", "line-width": 1, "line-opacity": 0.6 }} }});
+    map.addLayer({{ id: "county-highlight", type: "line", source: "counties",
+      filter: ["==", ["get", "GEOID"], "__none__"],
+      paint: {{ "line-color": "#ffe000", "line-width": 3, "line-opacity": 0.95 }} }});"""
+        county_highlight_js = (
+            '\n      map.setFilter("county-highlight", '
+            '["==", ["get", "GEOID"], countySel.value || "__none__"]);'
+        )
+    else:
+        county_setup_js = ""
+        county_highlight_js = ""
 
     return f"""<!DOCTYPE html>
 <html><head>
@@ -367,6 +392,7 @@ def maplibre_html(
         "circle-color": {json.dumps(match_expr)},
         "circle-opacity": 0.85, "circle-stroke-width": 0.3, "circle-stroke-color": "#333"
       }} }});
+{county_setup_js}
 
     // Combined filter: active risk tiers (legend toggles) AND the state/county dropdowns.
     const active = new Set({tiers_json});
@@ -377,7 +403,7 @@ def maplibre_html(
       const preds = [["in", ["get", "risk_tier"], ["literal", [...active]]]];
       if (stateSel.value) preds.push(["==", ["get", "state"], stateSel.value]);
       if (countySel.value) preds.push(["==", ["get", "county"], countySel.value]);
-      map.setFilter("loc", ["all", ...preds]);
+      map.setFilter("loc", ["all", ...preds]);{county_highlight_js}
     }};
 
     document.querySelectorAll(".legend .row").forEach((row) => {{
@@ -400,6 +426,7 @@ def maplibre_html(
     }};
     stateSel.addEventListener("change", () => {{ repopulateCounties(); applyFilter(); }});
     countySel.addEventListener("change", applyFilter);
+    applyFilter();  // apply the initial county-highlight (no-op) + tier/region filter
 
     map.on("click", "loc", (e) => {{
       const p = e.features[0].properties;
@@ -442,8 +469,14 @@ def build_map(
     if run_tiles:
         pmtiles_written, note = run_tippecanoe(geojson_path, pmtiles_path, report)
 
+    # County-boundary overlay is wired in only when its GeoJSON is present next to the HTML
+    # (generated out-of-band by scripts/fetch_county_boundaries.py; absent when offline).
+    counties_path = out_dir / "nc_counties.geojson"
+    counties_filename = counties_path.name if counties_path.exists() else None
+
     html = maplibre_html(
-        pmtiles_path.name, center=center, zoom=zoom, report=report, aggregates=aggregates
+        pmtiles_path.name, center=center, zoom=zoom, report=report, aggregates=aggregates,
+        counties_filename=counties_filename,
     )
     html_path = out_dir / "coverage_map.html"
     html_path.write_text(html)
@@ -458,6 +491,8 @@ def build_map(
     }
     if pmtiles_written:
         result["pmtiles"] = str(pmtiles_path)
+    if counties_filename:
+        result["counties"] = str(counties_path)
     return result
 
 

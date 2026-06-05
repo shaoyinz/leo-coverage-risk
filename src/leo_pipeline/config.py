@@ -369,10 +369,13 @@ class Reporting:
         }
     )
 
-    # Vector-tile zoom range for tippecanoe (point layer). z3 ≈ CONUS, z12 ≈ neighbourhood —
-    # enough to zoom from the AOI overview down to individual at-risk clusters.
+    # Vector-tile zoom range for tippecanoe (point layer). z3 ≈ CONUS, z14 ≈ rooftop block —
+    # deep enough that low-zoom point-thinning resolves to individual locations as you zoom in
+    # (MapLibre over-zooms past z14, so you can keep zooming in). z14 keeps the PMTiles under
+    # GitHub's 100 MB file limit so the map can be committed for reviewers; z15 pushed it to
+    # ~150 MB. z3..z14 spans AOI overview down to single locations.
     map_min_zoom: int = 3
-    map_max_zoom: int = 12
+    map_max_zoom: int = 14
     # Layer name embedded in the PMTiles + referenced by the MapLibre style.
     map_layer_name: str = "locations"
     # Base raster tiles for the MapLibre viewer (no API key; OSM standard tiles).

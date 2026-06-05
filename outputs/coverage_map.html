@@ -73,6 +73,13 @@
         "circle-opacity": 0.85, "circle-stroke-width": 0.3, "circle-stroke-color": "#333"
       } });
 
+    map.addSource("counties", { type: "geojson", data: "./nc_counties.geojson" });
+    map.addLayer({ id: "county-line", type: "line", source: "counties",
+      paint: { "line-color": "#ffffff", "line-width": 1, "line-opacity": 0.6 } });
+    map.addLayer({ id: "county-highlight", type: "line", source: "counties",
+      filter: ["==", ["get", "GEOID"], "__none__"],
+      paint: { "line-color": "#ffe000", "line-width": 3, "line-opacity": 0.95 } });
+
     // Combined filter: active risk tiers (legend toggles) AND the state/county dropdowns.
     const active = new Set(["clear", "at_risk", "severe", "undetermined"]);
     const stateSel = document.getElementById("stateSel");
@@ -83,6 +90,7 @@
       if (stateSel.value) preds.push(["==", ["get", "state"], stateSel.value]);
       if (countySel.value) preds.push(["==", ["get", "county"], countySel.value]);
       map.setFilter("loc", ["all", ...preds]);
+      map.setFilter("county-highlight", ["==", ["get", "GEOID"], countySel.value || "__none__"]);
     };
 
     document.querySelectorAll(".legend .row").forEach((row) => {
@@ -105,6 +113,7 @@
     };
     stateSel.addEventListener("change", () => { repopulateCounties(); applyFilter(); });
     countySel.addEventListener("change", applyFilter);
+    applyFilter();  // apply the initial county-highlight (no-op) + tier/region filter
 
     map.on("click", "loc", (e) => {
       const p = e.features[0].properties;

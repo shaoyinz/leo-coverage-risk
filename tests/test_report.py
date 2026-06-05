@@ -100,6 +100,8 @@ def test_maplibre_html_references_pmtiles_layer_and_colors():
     assert "World_Imagery" in html  # satellite basemap
     assert "raster-dem" in html  # DEM terrain / hillshade overlay
     assert "[-80.0, 35.0]" in html  # initial center
+    # No external glyph source: a dead/HTML-returning glyphs URL aborts all vector rendering.
+    assert "glyphs" not in html
 
 
 def test_maplibre_html_renders_state_and_county_filters():
@@ -115,6 +117,18 @@ def test_maplibre_html_renders_state_and_county_filters():
     assert 'data-state="37"' in html  # county option carries its state for cascading
     assert "Mecklenburg (37119)" in html  # FIPS-labelled county option
     assert '["all", ...preds]' in html  # combined tier + state + county filter
+
+
+def test_maplibre_html_county_overlay_only_when_file_supplied():
+    base = report.maplibre_html("locations.pmtiles", center=[-80.0, 35.0], zoom=8.0)
+    assert 'id: "county-line"' not in base  # no overlay without a boundary file
+    with_counties = report.maplibre_html(
+        "locations.pmtiles", center=[-80.0, 35.0], zoom=8.0,
+        counties_filename="nc_counties.geojson",
+    )
+    assert 'id: "county-line"' in with_counties
+    assert "./nc_counties.geojson" in with_counties
+    assert 'id: "county-highlight"' in with_counties  # selected-county emphasis
 
 
 # --- decision log --------------------------------------------------------------------
