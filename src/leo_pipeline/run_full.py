@@ -111,7 +111,7 @@ def process_tile(task: dict) -> dict:
             }
         ],
         "sky_spec": task.get("sky_spec", {}),
-        "dish_height_m": task.get("dish_height_m", 2.0),
+        "dish_height_m": task.get("dish_height_m", ANALYSIS.mount_heights_m[0]),
     }
     findings = run_analysis.compute_findings(info)
 
@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--mount-height",
         type=float,
-        help="Dish mount height (m) above the surface (default 2.0).",
+        help="Dish mount height (m) above the surface (default 0.0, roof-only).",
     )
     p.add_argument(
         "--theta",
@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> None:
         todo = todo[: args.limit]
 
     sky_spec = {"min_elev_deg": args.theta} if args.theta is not None else {}
-    dish_h = 2.0 if args.mount_height is None else args.mount_height
+    dish_h = ANALYSIS.mount_heights_m[0] if args.mount_height is None else args.mount_height
 
     print(f"Tiles total      : {total}")
     print(f"Already have findings: {done_already}")

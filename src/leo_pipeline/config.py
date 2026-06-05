@@ -217,7 +217,9 @@ class Analysis:
     # (architecture.md §4 versioning). Bump when any geometry/threshold default below changes.
     # 2026.07: surface is a gap-filled mosaic (lidar over DEM) + per-pixel provenance, and the
     # confidence flag is provenance/near-field/σ_H-margin driven (was whole-ray + pct-band).
-    spec_version: str = "spec-2026.07-mosaic"
+    # roof0: the as-installed baseline is roof-only (0 m), not an assumed 2 m mast — every
+    # obstruction_pct now reflects the dish as it sits, so the tag is bumped to mark the shift.
+    spec_version: str = "spec-2026.07-roof0"
 
     # --- Reception geometry (physical / regulatory; rationale "Starlink reception geometry") ---
     # Minimum reception (elevation) angle θ above the horizon. 25° is the conservative,
@@ -238,9 +240,11 @@ class Analysis:
     gso_keepout_halfwidth_deg: float = 18.0
 
     # --- Install / siting ---
-    # Dish mount heights above the surface to sweep (metres). Roof-only (0) is the default; the
-    # sweep lets A3 report "clear if raised to X m" instead of hard-coding one pole height.
-    mount_heights_m: tuple[float, ...] = (0.0, 1.5, 3.0)
+    # Dish mount heights above the surface to sweep (metres). Element [0] = 0.0 is the
+    # as-installed roof-only baseline (the default everywhere a single height is needed); 0.3
+    # and 0.6 m are the Starlink-shipped 1–2 ft pole raises, so A3 can report "clear if raised
+    # to 0.3/0.6 m" against hardware that actually exists rather than an arbitrary tall mast.
+    mount_heights_m: tuple[float, ...] = (0.0, 0.3, 0.6)
 
     # --- Risk banding (rationale "Risk banding & uncertainty") ---
     # obstruction_pct (dwell-weighted % of usable sky removed) cut-points for the tiers:

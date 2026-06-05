@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--mount-height",
         type=float,
-        help="Dish mount height (m) above the surface (default 2.0; rationale sweeps {0,1.5,3}).",
+        help="Dish mount height (m) above the surface (default 0.0, roof-only; sweep {0, 0.3, 0.6}).",
     )
     p.add_argument(
         "--theta",
@@ -211,7 +211,9 @@ def prepare(args: argparse.Namespace) -> dict:
     return {
         "work": work,
         "sky_spec": sky_spec,
-        "dish_height_m": 2.0 if args.mount_height is None else args.mount_height,
+        "dish_height_m": ANALYSIS.mount_heights_m[0]
+        if args.mount_height is None
+        else args.mount_height,
         "cache_dir": tools.INGESTION.cache_dir,
     }
 

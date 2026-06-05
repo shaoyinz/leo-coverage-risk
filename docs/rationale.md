@@ -41,9 +41,18 @@ over a simple buffer (see "Why this approach" below).
 
 | Install-guide requirement | Obstruction factor | Modeled with | Tool |
 |---------------------------|--------------------|--------------|------|
-| _e.g. clear view of sky_  | tree canopy        | canopy-height raster | `lookup_obstruction_layer` |
-| _e.g. unobstructed cone_  | terrain blocking   | DEM / slope          | `lookup_obstruction_layer` |
-| _e.g. no nearby structures_ | buildings        | building footprints  | `lookup_obstruction_layer` |
+| _e.g. clear view of sky_  | tree canopy        | canopy-height raster | `fetch_aligned_surface` → `compute_sky_obstruction` |
+| _e.g. unobstructed cone_  | terrain blocking   | DEM (fused surface horizon) | `fetch_aligned_surface` → `compute_sky_obstruction` |
+| _e.g. no nearby structures_ | buildings (lidar-DSM only; footprint fusion deferred) | building footprints | `fetch_aligned_surface` → `compute_sky_obstruction` |
+
+> **Tool note (as implemented).** The three obstruction factors are fused into one surface
+> by the A2 `fetch_aligned_surface` tool (a gap-filled DEM/lidar mosaic, §"Best-available-per-pixel
+> mosaic" below) and scored by the A3 `compute_sky_obstruction` tool via the horizon profile.
+> The earlier `lookup_obstruction_layer` / `compute_risk_score` placeholder stubs named in the
+> first design pass were **replaced** by these two real tools, and there is no separate weighted
+> "risk score" step — the single `obstruction_pct` is the score. Building *footprints* are a
+> deferred input: structures enter the surface only where a lidar DSM already captures them
+> (see "Buildings" under Known limitations).
 
 ## Starlink reception geometry (parameter defaults)
 
@@ -132,12 +141,23 @@ as a crisp threshold would manufacture false precision:
   mount height above it. We default to roof-only and sweep one or two mast heights, but the residual is real.
 - **Horizontal position/distance** also carry error, which propagates through $\tan\theta$.
 
-We therefore propagate a **vertical-uncertainty budget $\sigma_H$** (a parameter, from the source layers'
-stated accuracy) and report a **banded / probabilistic** result rather than a single clear/blocked verdict.
-With clearance margin $m = (H_b - H_a) - \text{Dist}_{ab}\tan\theta$: a comfortably negative $m$ (by several
-$\sigma_H$) is `clear`, a margin within a few $\sigma_H$ of zero is `at-risk` (too close to call given the
-data), and a case where $H_a$ cannot be established at all is `undetermined`. This is the link between the
-geometry and the three-state output defined under "Assumptions."
+We therefore carry a **vertical-uncertainty budget $\sigma_H$** (a parameter) and report a **banded**
+result rather than a single clear/blocked verdict, with $\sigma_H$ flowing into the confidence flag.
+
+**As implemented vs. the principled target.** Two clarifications where the current build is narrower than
+the ideal above:
+- **The risk *tier* is a pure function of `obstruction_pct`** against the band cut-points (`classify_tier`
+  in [`horizon.py`](../src/leo_pipeline/horizon.py)); $\sigma_H$ does **not** currently move a point between
+  `clear` and `at-risk`. Instead, $\sigma_H$ feeds the **confidence flag**: when the controlling surface
+  sits within $\pm\sigma_H$ of the $\theta$-line (the clearance $m = (H_b - H_a) - \text{Dist}_{ab}\tan\theta$
+  could flip under the data error), the verdict is reported **one confidence notch lower**, not re-tiered.
+  A full probabilistic clearance-margin model that shifts the tier itself is a documented next step.
+- $\sigma_H$ is a **single global default (3.0 m)** in `config.Analysis`, not yet a per-layer value derived
+  from each source's stated RMSE — per-layer $\sigma_H$ is the intended refinement.
+
+A case where $H_a$ cannot be established at all — i.e. no elevation datum sits under the point, not even the
+globally complete DEM — is `undetermined`. This is the link between the geometry and the three-state output
+defined under "Assumptions."
 
 ### Recommended defaults (summary)
 
@@ -149,12 +169,18 @@ geometry and the three-state output defined under "Assumptions."
 - **Azimuth weighting:** a *gradient* centred on the dish pointing direction (north-ish in CONUS),
   heaviest at mid/high northern elevations and lightest in the southern GSO-arc keep-out band — not a
   hard north-only mask, and not a full 360°.
-- **Impact metric:** dwell-time-weighted **% of usable sky removed**, banded into `clear` / `at-risk`
-  thresholds (≈1–5% tolerable, ≈10%+ disruptive) — never a bare binary.
-- **Vertical-uncertainty budget $\sigma_H$:** from the source layers' stated accuracy, propagated into
-  the clearance margin so borderline cases fall to `at-risk` rather than a false `clear`.
-- **Per-feature screening radius:** computed, not hard-coded — $\Delta H / \tan\theta$ per obstacle;
-  coarse pre-filter at $H_{b,max}/\tan(10°)$ (≈ 5.7× tallest plausible obstacle) bounds the query.
+- **Impact metric:** **% of usable sky removed**, banded into `clear` / `at-risk` thresholds (≈1–5%
+  tolerable, ≈10%+ disruptive) — never a bare binary. *As implemented the weighting is **azimuthal***
+  (a per-bearing dwell gradient); within the cone, elevations $[\theta, 90°]$ are weighted uniformly.
+  Full elevation-resolved sky-**time** weighting is the v2 TLE map (see "The more principled version").
+- **Vertical-uncertainty budget $\sigma_H$:** a single global default (3.0 m; per-layer is the intended
+  refinement), folded into the **confidence flag** so borderline cases drop a confidence notch — it does
+  not currently re-tier a point from `clear` to `at-risk`.
+- **Per-feature screening radius:** the *per-feature* cutoff is exact — a sample beyond
+  $\Delta H / \tan\theta$ cannot breach the $\theta$-line, so it never sets the horizon (geometry, not a
+  heuristic). The *outer query bound*, however, is **as-implemented a single fixed clamp**
+  `max_radius_m = 1500 m` for all classes, not the per-class derived radius described below; the
+  `derived_max_radius()` helper exists but is not yet wired into the scoring path (see the per-class table).
 
 **Sources:**
 [DishyTech – obstructions & field of view](https://www.dishytech.com/starlink-obstructions-how-much-is-too-much/),
@@ -172,30 +198,39 @@ geometry and the three-state output defined under "Assumptions."
 
 - **Roof install on an existing building.** Following the PDF, the dish is mounted on the roof of
   the building at the requested location; $H_a$ is the roof height (ideally plus mount height).
-- **Mount/pole height is a parameter, not a fixed value.** We evaluate at a roof-only default and
-  expose one or two standard mast heights, so the agent can report "clear if raised to $X$ m"
-  rather than hard-coding a single pole height.
-- **Alternative-location suggestions are clipped to the input parcel.** If we recommend better-visibility
-  spots within an {X} m buffer, candidates are constrained to the requester's own parcel (or building
-  footprint + immediate curtilage when no parcel is available). Cross-parcel suggestions are out of
-  scope — they would require easement/permission data we do not model.
+- **Mount/pole height is a parameter, not a fixed value.** We evaluate at a roof-only default
+  ($H_a$ mount height $= 0$ m above the surface) and sweep the **Starlink-shipped 0.3 / 0.6 m
+  (1–2 ft) pole raises** (`mount_heights_m = (0.0, 0.3, 0.6)`), so the agent can report "clear if
+  raised to 0.3/0.6 m" against hardware that actually ships — not an arbitrary tall mast.
+- **Alternative-location suggestions are clipped to a buffer (a parcel-clip proxy).** The
+  `find_clear_sky_spot` tool searches a grid of candidate positions/mast heights within an `buffer_m`
+  radius (default **50 m**) of the flagged point and keeps only those inside that circle. *As
+  implemented this is a buffer-radius proxy*, **not** a true parcel clip — no parcel layer is wired in,
+  so the "constrained to the requester's own parcel / curtilage" goal is approximated by the buffer.
+  Cross-parcel suggestions remain out of scope (they would need easement/permission data we do not model).
 - **Three-state assessment, not binary.** Outcomes are `clear` / `at-risk` / `undetermined`. A location
   is only scored when we can establish the dish height; otherwise it is `undetermined` with a reason code.
-- **"No building found" is disambiguated by cross-source corroboration, with a confidence flag.**
-  A missing footprint alone cannot distinguish (1) a genuinely vacant lot from (2) an unreliable/stale
-  data source. We corroborate against an independent height surface (nDSM = DSM − DEM), a second
-  footprint source, and dataset coverage metadata: agreement → high confidence; disagreement → flagged
-  as low-confidence/unreliable rather than asserted as fact. We never silently assume $H_a = 0$.
+- **"No building found" disambiguation is an *intended design*, not yet in the live build.** A missing
+  footprint alone cannot distinguish (1) a genuinely vacant lot from (2) an unreliable/stale source; the
+  design corroborates against an independent height surface (nDSM = DSM − DEM), a second footprint source,
+  and coverage metadata. *As implemented this is deferred*: building footprints are not yet an input
+  (structures enter the surface only via lidar DSM where present), so there is no footprint-vs-nDSM
+  corroboration step. What the live build **does** carry instead is the per-pixel **provenance** confidence
+  (lidar / DEM+canopy / bare-DEM fill) — a point scored on bare DEM is flagged low-confidence rather than
+  asserted as fact. The dish is mounted on the *surface elevation* under the point (never a silent
+  $H_a = 0$); a point with no surface datum at all is `undetermined`.
 - **Input locations are in WGS84 and inside the service footprint.** The CSV `latitude`/`longitude`
   are EPSG:4326 degrees; we assume each point already lies within Starlink's LEO service footprint
   and assess *obstruction* risk only, not footprint membership or latitude-band eligibility.
   Horizontal distances ($\text{Dist}_{ab}$) are computed in a local metric CRS (or geodesically),
   and all heights share one vertical datum.
 - **Bounded azimuth/distance search window.** Obstacles are only considered within the azimuth arc
-  and out to a maximum horizontal distance relevant to the dish's view cone. Beyond a cutoff
-  $d_{max} = (H_{b,max} - H_a)/\tan\theta$ — the range at which even a tallest-plausible obstacle
-  can no longer breach the minimum reception line — candidates are ignored. This bounds the per-point
-  neighbourhood query rather than scanning all features.
+  and out to a maximum horizontal distance relevant to the dish's view cone. The *per-sample* cutoff
+  $d_{max} = (H_{b,max} - H_a)/\tan\theta$ — the range at which even a tallest-plausible obstacle can no
+  longer breach the minimum reception line — is enforced exactly by the horizon geometry (a sample past it
+  yields an angle below $\theta$). *As implemented*, the outer march itself is bounded by a single
+  `max_radius_m = 1500 m` clamp rather than the per-class derived radius (see the per-class table), which
+  bounds the per-point query without scanning all features.
 - **Units are metres and degrees.** Heights and distances in metres, angles ($\theta$, $\alpha$) in
   degrees; rasters are resampled to a common resolution before sampling.
 - **One dish per location; mast height swept, not multiplied.** We model a single dish per
@@ -234,9 +269,12 @@ explicitly below.
    jointly on each obstacle's excess height $\Delta H = H_b - H_a$ and on $\theta$: a 20 m tree matters
    out to ~55 m at $\theta = 20°$, but a 300 m ridge matters out to ~1.7 km at $\theta = 10°$. No single
    radius covers both the near-field regime (canopy/buildings, tens of metres) and the far-field regime
-   (terrain, kilometres). The horizon profile is radius-free — it integrates outward until the surface
-   can no longer breach $\theta$ — and our search window is *derived* ($d_{max} = (H_{b,\max} - H_a)/\tan\theta$),
-   not guessed.
+   (terrain, kilometres). The horizon profile is radius-free in principle — it integrates outward until
+   the surface can no longer breach $\theta$ — and the *intended* search window is *derived*
+   ($d_{max} = (H_{b,\max} - H_a)/\tan\theta$), not guessed. *As implemented*, the outer march is bounded
+   by a single `max_radius_m = 1500 m` clamp (a cost guard), so terrain beyond ~1.5 km is not yet swept;
+   the per-class derived bound is wired as `derived_max_radius()` but not on the live scoring path (see the
+   per-class table). Within the swept window the per-sample $\theta$-test is still exact.
 
 **vs. a binary viewshed.** A classic viewshed answers "is target point $T$ visible from the dish?" — a
 boolean for one target. We instead need a *graded* quantity (% of the usable sky cone removed,
@@ -248,8 +286,12 @@ profile natively: **GRASS `r.horizon`** (closest conceptual fit — returns $H(\
 step), **WhiteboxTools `HorizonAngle`**, with **`gdal_viewshed`** as the boolean fallback.
 
 **Why it needs a fused surface, not bare earth.** $Z_{\text{surface}}$ must combine bare-earth terrain
-**+** canopy **+** structures. Where a lidar-derived DSM (first-return) exists we use it directly;
-elsewhere we synthesise a pseudo-DSM $= \text{DEM} + \max(\text{canopy height}, \text{building height})$.
+**+** canopy **+** structures. Where a lidar-derived DSM (first-return) exists we use it directly (it
+already carries canopy *and* structures); elsewhere we synthesise a pseudo-DSM. *As implemented the
+pseudo-DSM is $\text{DEM} + \max(\text{canopy height}, 0)$* — **buildings are deferred**: footprint-height
+rasterisation is not yet wired in (`_fuse_pseudo_dsm` omits the building term), so structures are captured
+only where the lidar DSM covers them. The design formula is $\text{DEM} + \max(\text{canopy}, \text{building})$;
+the building term is a documented gap (see [data-sources](data-sources.md) and Known limitations).
 This is also why canopy *cover fraction* (e.g. NLCD percent-cover) is not a substitute for canopy
 *height*: 100% cover by 3 m shrubs and 100% cover by 30 m conifers give identical cover but wildly
 different horizons. Cover is used only as a fallback / cross-check (see [data-sources](data-sources.md)).
@@ -293,13 +335,15 @@ and is gated to v2 only because the static gradient is adequate for screening-gr
 **What we compute.** For each location we estimate `obstruction_pct` — the dwell-time-weighted share of
 the sky the dish actually uses that is blocked by terrain, canopy, or structures at the modeled mount
 height. This is the same quantity the Starlink app reports as "% obstructed," produced from public maps
-instead of a rooftop scan. It feeds the 0..1 score in `compute_risk_score`, which we band as follows:
+instead of a rooftop scan. `compute_sky_obstruction` produces this percentage directly (there is no
+separate 0..1 score), and `classify_tier` bands it as follows — the tier is a **pure function of
+`obstruction_pct`** against the cut-points:
 
 | Output state | `obstruction_pct` (default cut-points) | Plain meaning |
 |--------------|----------------------------------------|---------------|
-| 🟢 **clear** | < ~1%, with clearance margin comfortably negative beyond the data error | The sky the dish needs is open; service quality likely good. |
-| 🟡 **at-risk — marginal** | ~1–10% (or margin within a few $\sigma_H$ of zero) | Periodic dropouts possible; the lower end (≲5%) is usually tolerable, the upper end trends to degraded. Often fixable by raising the mount or nudging placement. |
-| 🔴 **at-risk — severe** | > ~10% | Meaningful, persistent obstruction; likely needs re-siting or a higher mount. |
+| 🟢 **clear** | ≤ ~1% | The sky the dish needs is open; service quality likely good. |
+| 🟡 **at-risk — marginal** | ~1–10% | Periodic dropouts possible; the lower end (≲5%) is usually tolerable, the upper end trends to degraded. Often fixable by raising the mount or nudging placement. |
+| 🔴 **at-risk — severe** | ≥ ~10% | Meaningful, persistent obstruction; likely needs re-siting or a higher mount. |
 | ⚪ **undetermined** | n/a | **No elevation datum at all** under the point — not even the globally complete DEM (an AOI-edge gap). Needs human review, not a verdict. Coverage *gaps in the lidar* are no longer undetermined: the DEM fills them and the point is scored at low confidence (see the mosaic note above). |
 
 The 🟡 and 🔴 rows are both reported under the single engineering state **`at-risk`** — the doc's
@@ -371,17 +415,16 @@ also makes the sensitivity analysis the methodology promises *runnable* rather t
 
 | Parameter | Default | Why a knob / sensitivity |
 |-----------|---------|--------------------------|
-| `mount_height_m` ($H_a$ above roof) | **roof-only (0 m)**, swept over e.g. `{0, 1.5, 3.0}` | The single largest unknown. Sweeping it lets the agent report "clear if raised to $X$ m" instead of hard-coding one pole height. |
-| `alt_location_search_radius_m` | e.g. **15–30 m**, parcel-clipped | Radius for better-visibility suggestions; candidates are constrained to the requester's parcel (or footprint + curtilage). Larger radius → more candidates but more cross-parcel risk. |
+| `mount_heights_m` ($H_a$ above the surface) | **`(0.0, 0.3, 0.6)`** — roof-only baseline + the Starlink-shipped 0.3/0.6 m (1–2 ft) poles | The single largest unknown. Sweeping it lets the agent report "clear if raised to 0.3/0.6 m" against hardware that ships, instead of hard-coding one pole height. |
+| `buffer_m` (alt-location search radius) | **50 m** (`find_clear_sky_spot` default) | Radius for better-visibility suggestions; candidates are clipped to this buffer circle as a **parcel-clip proxy** (no parcel layer wired in). Larger radius → more candidates but more cross-parcel risk. |
 
 ### Risk banding & uncertainty
 
 | Parameter | Default | Why a knob / sensitivity |
 |-----------|---------|--------------------------|
-| `band_cutpoints_pct` | `{clear_max: 1, severe_min: 10}` | The 🟢/🟡/🔴 boundaries on `obstruction_pct`. **Must be calibrated** against the Starlink app on a labelled sample — see open questions. |
-| `sigma_H_m` ($\sigma_H$) | per source layer, from stated RMSE | Vertical-uncertainty budget propagated into the clearance margin; differs by layer (lidar DSM ≪ global building height). |
-| `clear_margin_sigma` | ~2–3 $\sigma_H$ | How many $\sigma_H$ the margin must clear to score `clear` rather than fall to `at-risk`. Controls the conservatism of the verdict. |
-| `risk_score_weights` | implementation default | How canopy / terrain / building factors combine into the 0..1 score in `compute_risk_score`. |
+| `band_clear_max_pct` / `band_severe_min_pct` | `1` / `10` | The 🟢/🟡/🔴 boundaries on `obstruction_pct` (the tier is a pure function of these). **Must be calibrated** against the Starlink app on a labelled sample — see open questions. |
+| `sigma_h_m` ($\sigma_H$) | **3.0 m** (single global default) | Vertical-uncertainty budget. *As implemented* it is a single scalar folded into the **confidence flag**: a verdict whose controlling clearance hugs the $\theta$-line within $\pm\sigma_H$ drops one confidence notch. Per-layer $\sigma_H$ (lidar DSM ≪ global building height) and a tier-shifting probabilistic margin are documented next steps — there is no separate `clear_margin_sigma` knob in the current build. |
+| ~~`risk_score_weights`~~ | n/a | **Removed / not implemented.** There is no weighted blend of canopy/terrain/building into a 0..1 score: the factors are fused into one surface (`max` in the pseudo-DSM / lidar override in the mosaic) and a single `obstruction_pct` is read off the horizon. |
 | `canopy_state` | **leaf-on** (worst case) | Toggle for seasonal foliage; leaf-on keeps `clear` verdicts conservative. |
 | `confidence_near_field_m` | **500 m** | Radius within which ray-sampling coverage drives the confidence flag (not the full `max_radius_m` ray). Larger → distant gaps start to matter again; this is what stops distant nodata from penalising a clean near-field verdict. |
 | `conf_near_sampled_high` / `_med` | **0.9 / 0.5** | Near-field sampled-fraction cut-points for the confidence knock-downs (≥ high → none, ≥ med → −1, else −2). **Calibration defaults**, like the risk bands. |
@@ -401,18 +444,18 @@ also makes the sensitivity analysis the methodology promises *runnable* rather t
 | Parameter | Default | Why a knob / sensitivity |
 |-----------|---------|--------------------------|
 | `dedup_precision` | **6** (~0.11 m) — *live* | Coordinate rounding before de-duplication ([`deduplicate_coordinates`](../src/leo_pipeline/tools/__init__.py)); lower values snap near-coincident points to a shared cell, trading spatial fidelity for fewer sampling jobs. |
-| `corroboration_thresholds` | agreement among nDSM, 2nd footprint source, coverage metadata | Decides whether "no building found" is a genuine vacant lot or an unreliable source, and sets the confidence flag. We never silently assume $H_a = 0$. |
-| `surface_source_preference` | lidar DSM where available, else pseudo-DSM | Which surface model wins when several cover a point; drives the low-confidence flag where only coarse data exists. |
+| `corroboration_thresholds` *(deferred)* | agreement among nDSM, 2nd footprint source, coverage metadata | *Design only — not in the live build* (buildings deferred). Intended to decide whether "no building found" is a genuine vacant lot or an unreliable source. What the live build uses instead is the per-pixel **provenance** confidence; we never silently assume $H_a = 0$ (no surface datum → `undetermined`). |
+| `surface_modes` (source preference) | **`(mosaic, true_dsm, pseudo_dsm, cover_proxy)`** | Fallback hierarchy, best first. `mosaic` (lidar over a complete DEM base, per-pixel provenance) is the default when the manifest carries both a DSM and a DEM; A2 walks down on a read failure. Drives the low-confidence flag where only coarse (DEM-fill) data exists. |
 
 ### Per-obstacle-class search radius
 
 How far out to look is naturally **per obstacle class** (terrain / building / canopy), because the
 distance at which a class can still breach the reception line scales with its height.
 
-| Class | `max_search_radius_m` (default) | Notes |
+| Class | Derived $R_{\max}$ (intended; live build uses one `max_radius_m`) | Notes |
 |-------|---------------------------------|-------|
 | **terrain** (DEM) | *derived*, km-scale: $(H_{\text{relief,max}} - H_a)/\tan\theta_{\min}$ | Solid earth, always a full block; the class that needs the kilometre window and the curvature/refraction correction. |
-| **building** (footprints) | *derived*, ~tens of m: $(H_{\text{bldg,max}} - H_a)/\tan\theta_{\min}$ | Blockage is confident; the *height* is the weak input, handled by $\sigma_H$. |
+| **building** (footprints) | *derived*, ~tens of m: $(H_{\text{bldg,max}} - H_a)/\tan\theta_{\min}$ | Blockage is confident; the *height* is the weak input, handled by $\sigma_H$. **Deferred input:** footprints are not yet rasterised — buildings enter only via the lidar DSM where it exists. |
 | **canopy** (height raster) | *derived*, ~tens–150 m: $(H_{\text{canopy,max}} - H_a)/\tan\theta_{\min}$ | Tens-of-metres window; tall mature canopy extends it. |
 
 **A single global radius is the wrong knob.** "Ignore anything past radius $R$" is the fixed-buffer
@@ -422,9 +465,16 @@ terrain or wastefully large for canopy. We therefore make the radius **per class
 hand-set**: $R_{\max,\text{class}} = (H_{\text{class,max}} - H_a)/\tan\theta_{\min}$. That is the
 *outer query bound* only — inside it, every individual feature is still kept or dropped by its **exact**
 cutoff $d_{max}(H_b) = (H_b - H_a)/\tan\theta$ (a feature beyond it cannot geometrically breach the
-reception line, so this is exact, not a heuristic). A manual `max_search_radius_m` override is retained as
-a safety clamp to bound query cost in pathologically dense tiles, but it should only ever *tighten* the
-derived value, and tightening it is logged as an approximation.
+reception line, so this is exact, not a heuristic).
+
+**As implemented, the outer bound is a single clamp, not yet per-class.** The live scoring path uses one
+`max_radius_m = 1500 m` clamp (`config.Analysis`) for every class — the per-class derivation above is the
+intended design, and the `derived_max_radius()` helper that computes
+$R_{\max,\text{class}} = (H_{\text{class,max}} - H_a)/\tan\theta_{\min}$ exists in
+[`horizon.py`](../src/leo_pipeline/horizon.py) but is **not wired into `score_xy`** yet. The practical
+consequence: the **exact per-sample $\theta$-test still holds** inside 1500 m, but terrain that would only
+breach the line *beyond* ~1.5 km (the km-scale terrain regime) is not yet swept. Wiring `derived_max_radius`
+into the per-class march is the remaining step; the clamp should then only ever *tighten* the derived value.
 
 ## Known limitations vs. on-site assessment
 
@@ -439,12 +489,18 @@ A remote, public-data assessment cannot fully replace an on-site dish-pointing c
 - **Fine-scale / near-field obstructions.** Chimneys, vents, railings, single overhanging branches, power
   lines and eaves can block a phased-array cone yet fall below raster resolution. On-site the Starlink app
   sees these directly; we cannot.
+- **Buildings as a separate input are deferred.** The fused pseudo-DSM is currently `DEM + canopy`
+  only — `_fuse_pseudo_dsm` omits the footprint-height term, and no nDSM/second-footprint corroboration
+  for "no building found" is wired in. Structures are captured only where a lidar DSM already covers the
+  point; elsewhere a nearby building is invisible to the horizon. Footprint rasterisation (and the
+  corroboration step) is the main remaining input gap.
 - **Exact pointing & a moving constellation.** The app picks the optimal boresight per site from live
-  ephemerides; our azimuth-weighting gradient is a static approximation of a constellation that is still
-  densifying and whose min-elevation rules are actively changing (2026).
+  ephemerides; our azimuth-weighting gradient is a static, **azimuth-only** approximation (elevations
+  within the cone weighted uniformly) of a constellation that is still densifying and whose min-elevation
+  rules are actively changing (2026).
 - **Micro-siting freedom.** An installer can move a few metres, raise a pole, or pick a different roof
-  face to clear an obstacle. Our parcel-clipped suggestions approximate this but cannot replicate a
-  technician walking the site.
+  face to clear an obstacle. Our buffer-clipped suggestions (a parcel-clip proxy) approximate this but
+  cannot replicate a technician walking the site.
 
 Net effect: the analysis is **conservative and screening-grade** — strong for prioritising and flagging
 likely-degraded locations at scale, not a substitute for final on-site verification.

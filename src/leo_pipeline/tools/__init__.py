@@ -1460,7 +1460,8 @@ def _surface_confidence_for(dsm_uri: str) -> str | None:
     "Starlink app would report, plus a clear/at_risk/severe tier (or 'undetermined' when no "
     "surface sits under the point). Deterministic geospatial math — you do NOT fetch data "
     "here. `points` is a list of {location_id, lat, lon} (EPSG:4326); `dsm_uri` is the cached "
-    "surface from A2; `dish_height_m` is the mount height above the surface (default 2); "
+    "surface from A2; `dish_height_m` is the mount height above the surface (default 0, "
+    "roof-only as-installed); "
     "`sky_spec` overrides the approved spec (min_elev_deg, az_center_deg, az_halfwidth_deg, "
     "az_weighting in uniform|north_biased); `azimuth_step_deg`/`max_radius_m`/`earth_curvature` "
     "tune the profile. Returns array<{location_id, obstruction_pct, blocked_azimuths, "
@@ -1479,7 +1480,9 @@ async def compute_sky_obstruction(args: dict[str, Any]) -> dict[str, Any]:
     points = args.get("points")
     dsm_uri = (args.get("dsm_uri") or "").strip()
     dish_height_m = args.get("dish_height_m")
-    dish_height_m = 2.0 if dish_height_m is None else float(dish_height_m)
+    dish_height_m = (
+        ANALYSIS.mount_heights_m[0] if dish_height_m is None else float(dish_height_m)
+    )
 
     if not isinstance(points, list) or not points:
         return _error("points must be a non-empty list of {location_id, lat, lon}")
@@ -1544,7 +1547,8 @@ async def compute_sky_obstruction(args: dict[str, Any]) -> dict[str, Any]:
     "cross-parcel suggestions are out of scope). `lat`/`lon` is the location (EPSG:4326); "
     "`dsm_uri` is the A2 surface; `buffer_m` is the search radius (default 50); `sky_spec` "
     "overrides the approved spec; `candidate_grid_m` is the grid spacing (default 5); "
-    "`dish_height_candidates_m` are the mount heights to try (default [2,4,8]). Returns the "
+    "`dish_height_candidates_m` are the mount heights to try (default [0, 0.3, 0.6] — roof-only "
+    "plus the Starlink 1–2 ft poles). Returns the "
     "current-position baseline plus array<{lat, lon, dish_height_m, obstruction_pct, "
     "improvement_pct}> sorted best-first.",
     {
@@ -1563,7 +1567,7 @@ async def find_clear_sky_spot(args: dict[str, Any]) -> dict[str, Any]:
     dsm_uri = (args.get("dsm_uri") or "").strip()
     buffer_m = float(args.get("buffer_m") or 50.0)
     grid_m = max(1.0, float(args.get("candidate_grid_m") or 5.0))
-    heights = args.get("dish_height_candidates_m") or [2.0, 4.0, 8.0]
+    heights = args.get("dish_height_candidates_m") or list(ANALYSIS.mount_heights_m)
 
     if lat is None or lon is None:
         return _error("lat and lon are required")
