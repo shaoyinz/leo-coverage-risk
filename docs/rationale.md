@@ -192,6 +192,303 @@ defined under "Assumptions."
 [FCC – EPFD limits & GSO-arc avoidance framework (FCC-26-26)](https://docs.fcc.gov/public/attachments/FCC-26-26A1.pdf),
 [Starlink Help Center – fixing obstructions](https://starlink.com/support/article/64009737-3768-0003-2838-4786c5a850ea).
 
+## Mathematical design — the obstruction engine, step by step
+
+This section is the plain-language tour of the math inside
+[`horizon.py`](../src/leo_pipeline/horizon.py) — the deterministic core the architecture keeps
+**out** of the LLM (*"LLM reasons, tools compute"*). You do **not** need a maths background:
+every formula below comes with an everyday analogy and a picture. The one idea to hold onto is
+this — **we never ask "is the sky blocked, yes or no?" We measure, direction by direction, how
+much of the useful sky a dish would lose, then blend those directions into a single percentage.**
+
+A few words you will see throughout:
+
+- **Azimuth** = a compass bearing. North = 0°, East = 90°, South = 180°, West = 270°.
+- **Elevation angle** = how high you tilt your head to look at something. 0° = the flat horizon,
+  90° = straight up.
+- **Boresight** = the direction the dish *aims* (north-ish in the US).
+- **DSM** ("surface model") = a height map of the ground **including** trees and buildings — so a
+  rooftop or a tree-top has its real height, not the bare earth beneath it.
+- $\theta$ (theta) = the **minimum elevation** the dish needs clear (default **25°**). Anything
+  below 25° doesn't count as usable sky in the first place.
+- $z_{dish}$ = the height of the dish itself (ground height under it **plus** the mount height).
+
+### The whole pipeline in one picture
+
+```mermaid
+flowchart TD
+    A["A point on the map<br/>(lon, lat) + mount height"] --> B["Read ground/roof height<br/>under the point<br/>(bilinear sampling)"]
+    B --> C["z_dish = surface height + mount<br/>(the dish's eye level)"]
+    C --> D["For each of ~180 compass directions:<br/>march outward, find the<br/>HIGHEST angle blocking the view<br/>= horizon angle H(φ)"]
+    D --> E["Per direction: how much of the<br/>25°→90° sky strip is eaten?<br/>= blocked fraction (0 to 1)"]
+    E --> F["Per direction: how much does it MATTER?<br/>= azimuth weight<br/>(north peak, cone gate, south dip)"]
+    F --> G["Weighted average across directions<br/>= obstruction_pct (0–100%)"]
+    G --> H["Banding → clear / at-risk / severe"]
+    D --> I["Coverage + σ_H margin → confidence flag"]
+    B --> I
+```
+
+Each box is a real function in `horizon.py`; the rest of this section opens them one at a time,
+in the order the code runs them.
+
+### 1. Walking outward along each compass bearing
+
+To find what blocks the view in a given direction, the code "walks" from the dish outward along
+that bearing in small steps (every few metres, out to `max_radius_m`), checking the ground height
+at each step (`horizon_profile`, horizon.py:215–218).
+
+Turning a compass bearing $\varphi$ and a distance $r$ into an actual map position uses basic
+trigonometry (north = 0°, going clockwise):
+
+$$x = x_0 + r\,\sin\varphi, \qquad y = y_0 + r\,\cos\varphi$$
+
+*Analogy:* stand at the dish, face one of ~180 directions, and take steps outward, glancing at
+the height of the ground every few metres. Do that for every direction and you've "felt out" the
+entire skyline around the point.
+
+```
+            N (0°)
+              |
+   NW         |         NE
+        \     |     /
+         \    |    /          a "ray" marched outward
+W(270°)---- DISH ----•---•---•---•→  E (90°)
+         /    |    \         r = 5m,10m,15m … out to max_radius
+        /     |     \
+   SW         |         SE
+              |
+            S (180°)
+```
+
+### 2. Reading the height *between* grid pixels (bilinear sampling)
+
+The height map is a grid, but our marching steps rarely land exactly on a grid pixel. So we blend
+the **four surrounding pixels**, weighting each by how close it is — this is *bilinear sampling*
+(`SurfaceSampler.sample`, horizon.py:105–140).
+
+*Analogy:* if you're standing ¾ of the way from one fence-post to the next, your ground height is
+mostly the far post's height and a little of the near post's — a smooth ramp, not a sudden step.
+
+```
+   pixel (r0,c0) ───────── pixel (r0,c1)
+        │      (1-tc)·(1-tr) │ tc·(1-tr)
+        │            • ←── your sample lands here
+        │  (tc, tr) = fractional position inside the cell
+        │      (1-tc)·tr     │  tc·tr
+   pixel (r1,c0) ───────── pixel (r1,c1)
+```
+
+The closer corner gets the bigger share. One important safety rule: if a pixel is **missing data**
+(a gap in the surface), it is dropped from the blend — the code never invents a fake height. Gaps
+instead lower the **confidence** of the answer (see §9), which is the honest thing to do.
+
+### 3. The heart of it — the horizon angle $H(\varphi)$
+
+For one bearing, every step outward gives a height. Compare each to the dish's eye level
+$z_{dish}$: something taller than the dish blocks the view, and **how high you must look to clear
+it** is an angle. The horizon for that bearing is simply the **largest** such angle along the ray
+(`horizon_profile`, horizon.py:220–228):
+
+$$H(\varphi) = \max_{r}\ \arctan\!\left(\frac{Z_{\text{surface}}(\varphi, r) - z_{dish}}{r}\right)$$
+
+*Analogy:* looking along one direction, the **tallest thing relative to your eye** is what sets
+how high you must tilt your head to see open sky past it. A nearby tall building and a far-away
+taller hill can give the same angle — that's why the formula divides height-difference by distance
+$r$ (rise over run).
+
+```
+        sky
+         ·  ·  ·  ←── open sky starts here
+        /
+       /  ← you must look up to angle H to clear the obstacle
+      /│
+     / │  ▓▓  building, height above dish = Z_surface − z_dish
+DISH•──┴──▓▓──────────  ground
+    └─ r ─┘
+    H = arctan( (Z_surface − z_dish) / r )
+```
+
+A pixel with missing data is forced to an angle of **−90°** so it can never accidentally become
+"the tallest thing" and raise the horizon — gaps lower confidence, they don't fake an obstacle.
+
+### 4. The optional curved-Earth correction
+
+Over long distances the Earth's curvature makes far-off ground sit a little **lower** than a
+perfectly flat sightline would suggest; light bending in the atmosphere (refraction) cancels about
+13% of that. When `earth_curvature` is on, the height difference is nudged down by a small amount
+that grows with distance (horizon.py:222–224):
+
+$$\Delta z \;\rightarrow\; \Delta z \;-\; (1 - k)\,\frac{r^{2}}{2R}, \qquad k = 0.13,\ \ R = 6{,}371{,}000\text{ m}$$
+
+*Analogy:* a ship's hull disappears over the sea horizon before its mast does — distant things
+dip below your flat line of sight. This correction is **off by default** and only matters at long
+range (the $r^2$ term is tiny up close), so it rarely changes a near-field verdict.
+
+### 5. How much of one direction's sky is blocked
+
+A dish only cares about sky **above $\theta$** (default 25°) up to straight-up (90°). For each
+bearing we ask: of that vertical strip from 25° to 90°, what fraction does the horizon eat from
+the bottom? (`obstruction_fraction`, horizon.py:286–288):
+
+$$\text{blocked}(\varphi) = \frac{\operatorname{clip}\big(\min(H, 90) - \theta,\ 0,\ 90-\theta\big)}{90 - \theta}\ \in [0, 1]$$
+
+*Analogy:* picture a column of useful sky 65° tall (from 25° up to 90°). If the horizon in that
+direction is at 40°, it has eaten the bottom 15° — that's $15/65 \approx 0.23$, so **23% of that
+direction's sky is gone.** A horizon at or below 25° eats nothing (0); a horizon at 90° eats
+everything (1).
+
+```
+   90° ┄┄┄ top of useful sky ┄┄┄┄┄┄
+       │                          │
+       │      OPEN  (counts)      │  ← 40° to 90° is clear
+   40° ┝━━━ horizon H here ━━━━━━━┥
+       │▓▓▓▓ BLOCKED (eaten) ▓▓▓▓▓│  ← 25° to 40° is lost
+   25° ┕━━━ θ = min elevation ━━━━┙   blocked = (40−25)/65 ≈ 0.23
+       (below 25° doesn't count at all)
+```
+
+### 6. How much each direction *matters* — the azimuth weight
+
+Not all directions are equal. Satellites spend more time in some parts of the sky, so a blockage
+there costs more usable connection time. The weight per bearing (`azimuth_weights`,
+horizon.py:257–275) combines **three** ideas, applied to the offset
+$\Delta = \varphi - \text{boresight}$ (wrapped to the range −180°…180°):
+
+1. **Cone gate.** The dish only sees a cone. Outside the half-width (default 55° each side of
+   boresight) the weight is **0** — those directions are ignored entirely.
+2. **A smooth north peak (raised cosine).** Inside the cone the weight is highest at the aim
+   direction and tapers gently to the edges:
+   $$w = \tfrac{1}{2}\,\big(1 + \cos\Delta\big)$$
+   This is **1.0** dead-centre and about **0.79** at the 55° edge — a gentle gradient, not an
+   on/off mask (consistent with "the azimuth weighting is a *gradient*" above).
+3. **Southern keep-out dip.** Within 18° of due-south (the regulatory GSO-arc band) the weight is
+   multiplied by **0.15** — dimmed, not killed, because high passes there can still be usable.
+
+*Analogy:* it's like grading where the front-row seats (the aim direction) count most, the
+side seats count a bit less, seats outside the room don't count at all, and a few seats behind a
+pillar (the southern band) barely count.
+
+```
+ weight
+ 1.0 |              ●  ← boresight (north), w = 1.0
+     |          ●       ●
+ 0.8 |      ●               ●  ← cone edge (55°), w ≈ 0.79
+     |   ●                     ●
+ 0.0 |●──┴────┴────┴────┴────┴──●═══════════ (outside cone → 0)
+     -55°    -27°   0°   +27°  +55°  …  180°(south, dipped ×0.15)
+              azimuth offset from the aim direction
+```
+
+(`uniform` weighting skips steps 2–3 — flat 1.0 inside the cone. `tle_derived` is a planned v2
+that currently falls back to this north-biased shape.)
+
+### 7. Blending it all into one percentage
+
+Now combine the two per-direction numbers — **how blocked** (§5) and **how much it matters**
+(§6) — into a single score. It's a **weighted average**, divided by the total weight so the
+result is always a clean 0–100% (`obstruction_fraction`, horizon.py:289–291):
+
+$$\text{obstruction\_pct} = 100 \times \frac{\sum_\varphi w(\varphi)\,\text{blocked}(\varphi)}{\sum_\varphi w(\varphi)}$$
+
+*Analogy:* exactly like a grade-weighted class average. Directions that matter more pull the
+score harder; dividing by the total weight means the answer doesn't change just because we used
+more directions or a wider cone — it stays an honest "share of useful sky lost."
+
+**A worked example** (three directions inside the cone, numbers verified against the code):
+
+| Bearing $\varphi$ | Horizon $H$ | blocked = $(H-25)/65$ | weight $w$ | $w \times$ blocked |
+|------|------|------|------|------|
+| 0° (north, dead-centre) | 40° | 0.231 | 1.000 | 0.231 |
+| 30° | 30° | 0.077 | 0.933 | 0.072 |
+| 50° (near cone edge) | 0° | 0.000 | 0.821 | 0.000 |
+| **totals** | | | **2.754** | **0.303** |
+
+$$\text{obstruction\_pct} = 100 \times \frac{0.303}{2.754} \approx \mathbf{10.98\%}$$
+
+The northern blockage dominates because it carries the most weight; the cleared edge direction
+pulls the average down. **10.98%** lands in the **severe** band (next).
+
+### 8. From a percentage to a verdict — the bands
+
+The single percentage becomes a colour-coded tier (`classify_tier`, horizon.py:300–308), using
+the field guidance above ("1–5% tolerable, ~10%+ disruptive"):
+
+```
+   0% ─────────────┬──────────────────────────┬──────────────► 100%
+      🟢 clear      1%      🟡 at-risk         10%   🔴 severe
+      (≤ 1%)              (1% – 10%)               (≥ 10%)
+```
+
+To keep the number and its colour consistent, the code **rounds the percentage once** and then
+decides the tier on that same rounded value (horizon.py:438) — so a result can never display as
+"1.0% 🟢 clear" while secretly having been tiered from 1.004%. A separate state, **undetermined**,
+is used when there's no height data under the point at all (no ground to mount the dish on) — that
+isn't a percentage at all, it's "we couldn't measure."
+
+### 9. How sure are we? — the confidence flag
+
+Every verdict ships with a **high / medium / low** confidence built from three physical signals
+(`confidence_flag`, horizon.py:319–360), so a shaky reading is still usable but clearly labelled:
+
+```
+   start from the DATA SOURCE under the point:
+        lidar ─────────────► high     (measured: trees + buildings)
+        DEM+canopy / +bldg ─► medium  (modelled, not measured)
+        bare-DEM fill ──────► low     (can't see trees/buildings at all)
+
+   then knock DOWN a rung when the answer is shaky:
+        ▼ −1 or −2  if the near-field sky is poorly sampled (gaps where it counts)
+        ▼ −1        if the verdict is a coin-flip: the deciding surface sits within
+                    ±σ_H (default 3 m) of the cut-off line — multi-metre data error
+                    could flip it either way
+
+   high ▲
+   med  │   (each ▼ drops one rung; floor is low, ceiling is high)
+   low  ▼
+```
+
+*Analogy:* you trust a reading more when it comes from a **good instrument** (lidar), when you got
+**plenty of samples** where it matters, and when the result isn't **borderline**. Miss any of
+those and the confidence steps down a rung — the number stays, the caveat is attached.
+
+### 10. Two supporting formulas
+
+**Clearance margin — "how close to the edge?"** (horizon.py:244–247). The cut-off line an obstacle
+must reach to start blocking sits at height $z_{thr} = z_{dish} + r\tan\theta$ at distance $r$. The
+gap between that line and the actual surface is the **margin** $m = z_{thr} - z_{\text{surface}}$.
+A small margin (within $\pm\sigma_H$) is the "coin-flip" trigger in §9.
+
+```
+                          θ-line: z_dish + r·tanθ
+   z_dish •┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+          │           ↕ margin m (room before it blocks)
+          │        ▓▓▓ surface (roof/tree-top)
+          └──────── r ─────────►
+```
+
+**Derived search radius — "how far do we even need to look?"** (`derived_max_radius`,
+horizon.py:379–385). An obstacle of excess height $\Delta H$ above the dish can only breach the
+$\theta$-line if it's closer than:
+
+$$d_{\max} = \frac{H_{b,\max} - H_a}{\tan\theta} = \frac{\Delta H}{\tan\theta}$$
+
+*Analogy:* a short obstacle far away simply can't poke above your 25° sightline — so there's no
+point searching past $d_{\max}$. This is the same $1/\tan\theta$ "distance factor" as the table in
+the reception-geometry section above (≈ 2.1 m of reach per metre of height at 25°).
+
+### Reading the code — concept → function map
+
+| Concept (section) | Function in `horizon.py` | Lines |
+|---|---|---|
+| March a bearing, build the profile (§1, §3, §4) | `horizon_profile` | 190–249 |
+| Read height between pixels (§2) | `SurfaceSampler.sample` | 105–140 |
+| Blocked fraction + blend to a % (§5, §7) | `obstruction_fraction` | 278–297 |
+| Direction weights (§6) | `azimuth_weights` | 257–275 |
+| Bands → tier (§8) | `classify_tier` | 300–308 |
+| Confidence flag (§9) | `confidence_flag` | 319–360 |
+| Clearance margin / search radius (§10) | `horizon_profile` / `derived_max_radius` | 244–247 / 379–385 |
+| Full per-point score (ties it together) | `score_xy` | 394–464 |
+
 ## Assumptions & open questions
 
 ### Assumptions (defaults we adopt unless told otherwise)
