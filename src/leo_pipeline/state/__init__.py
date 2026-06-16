@@ -62,6 +62,11 @@ class DatasetCandidate:
     coverage_pct: float | None = None  # share of the AOI the dataset covers
     license: str | None = None
     rationale: str = ""
+    # Tiled-access pattern for a non-COG, quadkey-gridded source (e.g. OpenBuildingMap vector
+    # GeoParquet): {url_template ({quadkey} placeholder), quadkey_zoom, geom_col, height_col,
+    # bbox_col}. Lets A2 fetch the source straight from the manifest — no config edit — so the
+    # manifest is the single source of truth for buildings too (omitted keys fall back to config).
+    access_params: dict | None = None
 
 
 @dataclass

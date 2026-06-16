@@ -94,10 +94,16 @@ async def build_surface(
     if not manifest:
         raise RuntimeError("no surface inputs resolved — check network access to the COG hosts")
     # OpenBuildingMap is vector GeoParquet resolved per-tile inside fetch_aligned_surface (from
-    # the bbox's quadkey), so the manifest carries the source marker, not a STAC href. A remote
-    # OBM failure is swallowed downstream — buildings are opportunistic, never required.
+    # the bbox's quadkey), so the manifest carries the *access pattern* (URL template + quadkey
+    # zoom + vintage), not a STAC href — A2 reads the source from the manifest, not config (the
+    # config values are only defaults). A remote OBM failure is swallowed downstream — buildings
+    # are opportunistic, never required.
     if with_buildings:
-        manifest["buildings"] = INGESTION.building_source_url
+        manifest["buildings"] = {
+            "url_template": INGESTION.building_source_url,
+            "quadkey_zoom": INGESTION.building_quadkey_zoom,
+            "vintage": "GHSL 2023A heights (OSM 2024-07 footprints)",
+        }
         if verbose:
             print(f"  [obm ] buildings        -> {INGESTION.building_source_url}")
 

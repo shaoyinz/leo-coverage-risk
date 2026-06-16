@@ -501,6 +501,48 @@ def test_building_source_urls_templates_quadkey():
     ]
 
 
+def test_building_source_urls_honours_manifest_template_and_zoom():
+    # A manifest-supplied template + zoom drive the URL, not the config default.
+    urls = tools._building_source_urls(
+        [-80.86, 35.21, -80.82, 35.25],
+        url_template="https://example.org/obm/{quadkey}.parquet",
+        zoom=6,
+    )
+    assert urls == ["https://example.org/obm/032003.parquet"]
+
+
+def test_building_access_prefers_manifest_then_config():
+    # An entry's access fields win; omitted ones fall back to the INGESTION config defaults.
+    acc = tools._building_access(
+        {"url_template": "https://x/{quadkey}.parquet", "quadkey_zoom": 7, "height_col": "h_m"}
+    )
+    assert acc["url_template"] == "https://x/{quadkey}.parquet"
+    assert acc["quadkey_zoom"] == 7
+    assert acc["height_col"] == "h_m"
+    assert acc["geom_col"] == tools.INGESTION.building_geom_col  # default
+
+    # A template smuggled in as an href (offline / back-compat path) is recognised.
+    via_href = tools._building_access({"hrefs": ["https://y/{quadkey}.parquet"]})
+    assert via_href["url_template"] == "https://y/{quadkey}.parquet"
+    assert via_href["quadkey_zoom"] == tools.INGESTION.building_quadkey_zoom
+
+    # Empty entry -> all config defaults; idempotent on an already-resolved dict.
+    base = tools._building_access(None)
+    assert base["url_template"] == tools.INGESTION.building_source_url
+    assert tools._building_access(base) == base
+
+
+def test_manifest_hrefs_carries_building_access_and_marks_presence():
+    # buildings entry with only access metadata (no plain href) still registers as present,
+    # and the access keys ride through for fetch_aligned_surface to resolve.
+    out = tools._manifest_hrefs(
+        {"buildings": {"url_template": "https://x/{quadkey}.parquet", "quadkey_zoom": 7}}
+    )
+    assert out["buildings"]["url_template"] == "https://x/{quadkey}.parquet"
+    assert out["buildings"]["quadkey_zoom"] == 7
+    assert out["buildings"]["hrefs"] == []  # presence is the on-switch, no COG href needed
+
+
 def test_rasterize_building_window_burns_max_height_on_dst_grid(monkeypatch):
     """OBM footprints rasterize onto the exact ``_dst_grid`` grid, tallest-wins on overlap,
     nodata where no building — the read itself is monkeypatched (no network)."""
@@ -512,7 +554,7 @@ def test_rasterize_building_window_burns_max_height_on_dst_grid(monkeypatch):
     tall = shp_box(minx, miny, minx + 0.003, maxy).wkb        # left third (overlaps), 30 m
     monkeypatch.setattr(
         tools, "_read_obm_features",
-        lambda urls, bb: [(short, "HHT:5.00"), (tall, "HHT:30.00")],
+        lambda urls, bb, **kw: [(short, "HHT:5.00"), (tall, "HHT:30.00")],
     )
 
     out = tools._rasterize_building_window(bbox, "EPSG:32617", 10.0, urls=["x"])
@@ -545,7 +587,7 @@ def test_composite_surface_fuses_buildings_max_and_provenance_4():
 def _fake_bld_layer(value=30.0, shape=(4, 4), nd=-9999.0):
     from rasterio.transform import from_bounds
 
-    return lambda bbox, crs, gsd, urls=None: {
+    return lambda bbox, crs, gsd, urls=None, access=None: {
         "array": np.full(shape, float(value), dtype="float32"),
         "transform": from_bounds(0, 0, shape[1] * 10, shape[0] * 10, shape[1], shape[0]),
         "crs": "EPSG:32617",
@@ -614,6 +656,41 @@ def test_fetch_building_read_failure_degrades_gracefully(
     assert not env.get("is_error")                  # tile survives the building failure
     assert payload["provenance_fractions"]["building"] == pytest.approx(0.0)
     assert payload["provenance_fractions"]["pseudo"] == pytest.approx(1.0)
+
+
+def test_fetch_uses_manifest_building_template(redirect_ingestion, monkeypatch):
+    """The buildings source is manifest-driven: a manifest url_template (not config) is what
+    A2 resolves the OBM quadkey URLs from, and it carries into the rasterize call + cache key."""
+    captured: dict = {}
+
+    def _capture_bld(bbox, crs, gsd, urls=None, access=None):
+        captured["urls"] = urls
+        captured["access"] = access
+        return _fake_bld_layer(30.0)(bbox, crs, gsd, urls=urls, access=access)
+
+    monkeypatch.setattr(tools, "_sign_href", lambda h: h)
+    monkeypatch.setattr(tools, "_read_window_reprojected", lambda href, *a: _win(100.0))
+    monkeypatch.setattr(tools, "_rasterize_building_window", _capture_bld)
+
+    env, payload = _fetch(
+        {
+            "tile_id": "MT",
+            "bbox": [-80.86, 35.21, -80.82, 35.25],
+            "manifest": {
+                "dem": "http://dem",
+                "buildings": {
+                    "url_template": "https://example.org/obm/{quadkey}.parquet",
+                    "quadkey_zoom": 6,
+                    "vintage": "v9",
+                },
+            },
+            "surface_mode": "pseudo_dsm",
+        }
+    )
+    assert not env.get("is_error")
+    assert captured["urls"] == ["https://example.org/obm/032003.parquet"]
+    assert captured["access"]["url_template"] == "https://example.org/obm/{quadkey}.parquet"
+    assert payload["vintage_map"]["buildings"] == "v9"  # manifest vintage flows through
 
 
 def test_cache_key_tracks_building_inputs():

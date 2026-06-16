@@ -47,6 +47,7 @@ dev = [
 # One-shot entrypoints for the agents (after `pip install -e .`); without reinstalling,
 # use `python -m leo_pipeline.run_discovery` / `run_ingestion` / `tiling`.
 leo-discovery = "leo_pipeline.run_discovery:main"   # A1: data manifest
+leo-manifest = "leo_pipeline.manifest_edit:main"    # H1: human add/remove/delete manifest entries
 leo-tiling = "leo_pipeline.tiling:main"             # tile the de-duplicated work list
 leo-ingestion = "leo_pipeline.run_ingestion:main"   # A2: aligned per-tile surfaces
 leo-analysis = "leo_pipeline.run_analysis:main"     # A3: per-location obstruction scores

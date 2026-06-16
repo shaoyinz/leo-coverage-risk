@@ -510,6 +510,13 @@ def _resolve_target_crs(target_crs: str | None, bbox: list[float]) -> str:
     return str(target_crs)
 
 
+# Manifest-carried OBM access keys — what makes the building source *manifest-driven* rather
+# than config-bound: the tiled-URL template (with a ``{quadkey}`` placeholder), the quadkey zoom
+# level, and the GeoParquet column names. Any key a manifest entry omits falls back to the
+# matching INGESTION config default in :func:`_building_access`.
+_BUILDING_ACCESS_KEYS = ("url_template", "quadkey_zoom", "geom_col", "height_col", "bbox_col")
+
+
 def _manifest_hrefs(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Normalise the A1 ``manifest`` arg to ``factor -> {hrefs, vintage}``.
 
@@ -518,6 +525,12 @@ def _manifest_hrefs(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     (``surface``/``dsm``/``true_dsm`` for the lidar DSM, ``terrain``/``dem`` for the
     bare-earth DEM). ``hrefs`` is always a list (one entry for a single granule, several when
     a tile spans a granule boundary). Returns only the factors actually present.
+
+    The ``buildings`` factor is special: OBM is vector GeoParquet on a quadkey grid, not a
+    single COG, so its *presence* is the fusion on-switch and the access pattern rides on the
+    entry (``url_template``/``quadkey_zoom``/column names — see ``_BUILDING_ACCESS_KEYS``).
+    Those keys are passed through here and resolved by :func:`_building_access`, so a buildings
+    entry counts as present even when it carries no plain href.
     """
     aliases = {
         "surface": ("surface", "dsm", "true_dsm"),
@@ -541,10 +554,13 @@ def _manifest_hrefs(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 if isinstance(val, dict):
                     href = val.get("asset_href") or val.get("href") or val.get("source_url")
                     vintage = val.get("vintage")
+                    extra = {k: val[k] for k in _BUILDING_ACCESS_KEYS if val.get(k) is not None}
                 else:
-                    href, vintage = val, None
+                    href, vintage, extra = val, None, {}
                 hrefs = _as_list(href)
-                if hrefs:
+                if factor == "buildings":
+                    out[factor] = {"hrefs": hrefs, "vintage": vintage, **extra}
+                elif hrefs:
                     out[factor] = {"hrefs": hrefs, "vintage": vintage}
                 break
     return out
@@ -735,13 +751,46 @@ def _bbox_quadkeys(bbox4326: list[float], zoom: int) -> list[str]:
     return out
 
 
-def _building_source_urls(bbox4326: list[float]) -> list[str]:
-    """OBM GeoParquet URL(s) for the quadkey file(s) covering the tile bbox."""
-    zoom = INGESTION.building_quadkey_zoom
-    return [
-        INGESTION.building_source_url.format(quadkey=qk)
-        for qk in _bbox_quadkeys(bbox4326, zoom)
-    ]
+def _building_access(entry: dict[str, Any] | None) -> dict[str, Any]:
+    """Resolve OBM access (URL template, quadkey zoom, GeoParquet column names) for the
+    buildings factor — each value taken from the manifest ``entry`` when present, else the
+    matching INGESTION config default.
+
+    This is what makes the building source *manifest-driven*: a manifest can point A2 at a
+    different quadkey-tiled building dataset (or override its columns) with no code/config
+    change, while an entry carrying only the on-switch still works off the config defaults.
+    Idempotent — passing an already-resolved access dict back in returns the same values.
+    """
+    entry = entry or {}
+    template = entry.get("url_template")
+    if not template:
+        # accept a template smuggled in as an href (the offline / back-compat path passes the
+        # template string straight through), recognised by its ``{quadkey}`` placeholder.
+        for h in entry.get("hrefs") or []:
+            if "{quadkey}" in str(h):
+                template = h
+                break
+    zoom = entry.get("quadkey_zoom")
+    return {
+        "url_template": str(template or INGESTION.building_source_url),
+        "quadkey_zoom": int(zoom) if zoom is not None else INGESTION.building_quadkey_zoom,
+        "geom_col": entry.get("geom_col") or INGESTION.building_geom_col,
+        "height_col": entry.get("height_col") or INGESTION.building_height_col,
+        "bbox_col": entry.get("bbox_col") or INGESTION.building_bbox_col,
+    }
+
+
+def _building_source_urls(
+    bbox4326: list[float], url_template: str | None = None, zoom: int | None = None
+) -> list[str]:
+    """OBM GeoParquet URL(s) for the quadkey file(s) covering the tile bbox.
+
+    ``url_template``/``zoom`` come from the manifest (via :func:`_building_access`) so the
+    source is manifest-driven; both fall back to the INGESTION config default when omitted.
+    """
+    template = url_template or INGESTION.building_source_url
+    zoom = INGESTION.building_quadkey_zoom if zoom is None else int(zoom)
+    return [template.format(quadkey=qk) for qk in _bbox_quadkeys(bbox4326, zoom)]
 
 
 def _parse_gem_height(raw: Any) -> float | None:
@@ -780,25 +829,31 @@ def _parse_gem_height(raw: Any) -> float | None:
     return float(min(max(metres, lo), hi))
 
 
-def _read_obm_features(urls: list[str], bbox4326: list[float]) -> list[tuple[Any, Any]]:
+def _read_obm_features(
+    urls: list[str],
+    bbox4326: list[float],
+    geom_col: str | None = None,
+    height_col: str | None = None,
+    bbox_col: str | None = None,
+) -> list[tuple[Any, Any]]:
     """Read OBM building polygons + GEM height string within ``bbox4326`` from ``urls``.
 
     Anonymous HTTPS GeoParquet via DuckDB (``spatial`` + ``httpfs``), pre-filtered on the
     parquet's own ``bbox`` struct so only intersecting rows decode. Returns ``(wkb, height)``
-    per building. Isolated + network-only so tests monkeypatch it with synthetic WKB (mirrors
-    how ``_read_window_reprojected`` is stubbed). A missing quadkey file (ocean/edge) or a
-    transient remote error skips that granule — buildings are opportunistic, never required.
+    per building. The geometry/height/bbox column names default to the OBM schema (INGESTION
+    config) but may be overridden by the manifest so a differently-schema'd quadkey-parquet
+    source still reads. Isolated + network-only so tests monkeypatch it with synthetic WKB
+    (mirrors how ``_read_window_reprojected`` is stubbed). A missing quadkey file (ocean/edge)
+    or a transient remote error skips that granule — buildings are opportunistic, never required.
     """
     import warnings
 
     import duckdb
 
     minx, miny, maxx, maxy = [float(v) for v in bbox4326]
-    gc, hc, bc = (
-        INGESTION.building_geom_col,
-        INGESTION.building_height_col,
-        INGESTION.building_bbox_col,
-    )
+    gc = geom_col or INGESTION.building_geom_col
+    hc = height_col or INGESTION.building_height_col
+    bc = bbox_col or INGESTION.building_bbox_col
     con = duckdb.connect()
     con.execute(
         "INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs; SET s3_region='us-west-2';"
@@ -824,6 +879,7 @@ def _rasterize_building_window(
     dst_crs: str,
     dst_gsd_m: float,
     urls: list[str] | None = None,
+    access: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Rasterize OBM building heights onto the tile's destination grid.
 
@@ -831,7 +887,8 @@ def _rasterize_building_window(
     gsd_m, shape}``) so it drops straight into the surface composite. Footprints are reprojected
     to ``dst_crs`` and burned (tallest-wins on overlap) onto the :func:`_dst_grid` grid; pixels
     with no building stay nodata (contribute 0 height — a conservative *clear* lean, matching how
-    absent canopy is treated).
+    absent canopy is treated). ``access`` (the manifest-resolved URL template / quadkey zoom /
+    column names) drives the source; it defaults to the INGESTION config when omitted.
     """
     import numpy as np
     from rasterio.features import rasterize
@@ -841,9 +898,16 @@ def _rasterize_building_window(
 
     nodata = -9999.0
     dst_transform, width, height, _ = _dst_grid(bbox4326, dst_crs, dst_gsd_m)
+    access = _building_access(access)
     if urls is None:
-        urls = _building_source_urls(bbox4326)
-    rows = _read_obm_features(urls, bbox4326)
+        urls = _building_source_urls(bbox4326, access["url_template"], access["quadkey_zoom"])
+    rows = _read_obm_features(
+        urls,
+        bbox4326,
+        geom_col=access["geom_col"],
+        height_col=access["height_col"],
+        bbox_col=access["bbox_col"],
+    )
 
     shapes: list[tuple[Any, float]] = []
     for wkb_bytes, hstr in rows:
@@ -1060,7 +1124,9 @@ def _coverage_and_confidence(surface_mode: str, valid_frac: float) -> tuple[str,
     "the COG window(s) covering the tile bbox, reproject to a metric CRS, and either pass "
     "through a true lidar DSM or fuse DEM + max(canopy, building) into a pseudo-DSM/mosaic. "
     "Buildings (OpenBuildingMap) fuse opportunistically into the mosaic/pseudo_dsm fill where "
-    "the manifest carries a 'buildings' factor. Deterministic, "
+    "the manifest carries a 'buildings' factor; that entry may be a {url_template (with a "
+    "{quadkey} placeholder), quadkey_zoom, geom_col, height_col, bbox_col, vintage} object to "
+    "point at any quadkey-tiled building source (omitted keys fall back to config). Deterministic, "
     "cached and idempotent (re-running a tile with unchanged inputs is a no-op). You do "
     "NOT score risk here. `tile_id` names the cache entry; `bbox` is "
     "[min_lon,min_lat,max_lon,max_lat] in EPSG:4326; `manifest` maps obstruction factor -> "
@@ -1163,7 +1229,16 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
     # lidar DSM already carries them). Resolve the actual quadkey file URL(s) so the cache key
     # tracks the building data read, not just the template marker in the manifest.
     use_buildings = buildings is not None and surface_mode in ("mosaic", "pseudo_dsm")
-    building_urls = _building_source_urls(bbox) if use_buildings else None
+    # Access (URL template / quadkey zoom / columns) is read from the manifest's buildings
+    # entry — config only supplies defaults — so the building source is fully manifest-driven.
+    building_access = _building_access(buildings) if use_buildings else None
+    building_urls = (
+        _building_source_urls(
+            bbox, building_access["url_template"], building_access["quadkey_zoom"]
+        )
+        if use_buildings
+        else None
+    )
 
     href_map = {
         "surface": dsm["hrefs"] if dsm else None,
@@ -1212,7 +1287,9 @@ async def fetch_aligned_surface(args: dict[str, Any]) -> dict[str, Any]:
     # and keeps the tile (the surface is still valid without it), rather than failing the tile.
     if use_buildings:
         try:
-            bld = _rasterize_building_window(bbox, target_crs, target_gsd_m, urls=building_urls)
+            bld = _rasterize_building_window(
+                bbox, target_crs, target_gsd_m, urls=building_urls, access=building_access
+            )
             if bld is not None and bool((bld["array"] != bld["nodata"]).any()):
                 reads["buildings"] = bld
                 vintage_map["buildings"] = buildings.get("vintage")

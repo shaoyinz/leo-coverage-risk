@@ -91,3 +91,41 @@ calls are removed. A cold-cache run of the default tile takes well under a minut
 ../../.venv/bin/python -m pytest                                      # 160 deterministic tests
 LEO_RUN_LIVE=1 ../../.venv/bin/python -m pytest -m live -k ingestion  # real DEM window read
 ```
+
+
+  ---
+  Subject: Builders Challenge #50 submission — LEO Satellite Coverage Risk (North Carolina)
+
+  ---
+  Hi [reviewer name / Ready team],
+  
+  Please find my submission for Builders Challenge #50 — an agent-driven geospatial pipeline that flags funded
+  locations whose Starlink connectivity is likely degraded by environmental obstructions (tree canopy, terrain, and
+  buildings).
+
+  - Repository: https://github.com/shaoyinz/leo-coverage-risk
+  - 5-minute walkthrough video: [link]
+
+  What it does. Five Claude-Agent-SDK agents (Opus driver / Sonnet workers) run discovery → surface ingestion →
+  per-azimuth horizon analysis → QA → reporting. Code does the deterministic geometry and raster work; the LLM picks
+  parameters, triages anomalies, and narrates — each step is auditable and reproducible.
+
+  Headline finding (all 4,514,477 NC locations). 96.4% clear / 3.2% at-risk / 0.4% severe. Household-weighted, ~3.6% 
+  (≈169.9K households) are at-risk, concentrated in dense-canopy/built-up counties and the western Blue Ridge —
+  priority county Mecklenburg (FIPS 37119, ~26K at-risk households). Read it as a prioritized verify-on-site list, not
+  a service guarantee.
+
+  Deliverables (all in the repo, see README "Deliverables map"):
+  - Agent system design + architecture diagram, tool schemas, and cross-agent state management
+  - Analysis rationale & methodology, data sourcing & quality notes
+  - Validation/QA and reporting agents, plus an interactive MapLibre risk map (bonus) and an officer-facing decision
+  log
+  - AI-tool disclosure (AI_TOOLS.md)
+  
+  One scope note, for transparency. The full 4.5M-location run was executed with the deterministic engine — the same 
+  c]ode the agents call through their tools — rather than driving the LLM over all 5,176 tiles, which would have been
+  cost-prohibitive on the testing budget. The agentic orchestration (all five agents, LLM in the loop) is verified
+  end-to-end on a representative tile, so the agent layer is demonstrably live and every reported number is
+  reproducible.
+
+  Happy to walk through any part in more detail. Thank you for the opportunity.
