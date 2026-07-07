@@ -4,9 +4,6 @@ An **agent-driven geospatial data pipeline** that identifies locations inside a 
 satellite provider's service footprint whose connectivity is likely degraded by
 environmental obstructions — tree canopy, terrain, and structures.
 
-Submission for the Ready Builders Challenge
-([issue #50](https://github.com/ready/builders-challenge/issues/50)).
-
 ## Status
 
 Methodology, Starlink reception geometry, and tuneable parameters documented
